@@ -1,4 +1,3 @@
-
 import React, { useState } from "react";
 import Post, { PostProps } from "./Post";
 import { Button } from "@/components/ui/button";
@@ -12,6 +11,7 @@ import {
   SelectValue 
 } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
+import { useNavigate } from "react-router-dom";
 
 const MOCK_POSTS: PostProps[] = [
   {
@@ -70,9 +70,14 @@ type SortOption = "trending" | "hot" | "new" | "top";
 
 const PostList = () => {
   const [sortBy, setSortBy] = useState<SortOption>("hot");
+  const navigate = useNavigate();
 
   // This would typically use an API call with the sortBy parameter
   const posts = MOCK_POSTS;
+  
+  const handlePostClick = (postId: string) => {
+    navigate(`/post/${postId}`);
+  };
   
   return (
     <div>
@@ -129,7 +134,11 @@ const PostList = () => {
       
       <div className="space-y-4">
         {posts.map((post) => (
-          <Post key={post.id} {...post} onClick={() => alert(`Viewing post: ${post.title}`)} />
+          <Post 
+            key={post.id} 
+            {...post} 
+            onClick={() => handlePostClick(post.id)} 
+          />
         ))}
       </div>
     </div>

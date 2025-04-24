@@ -1,10 +1,12 @@
-
 import React from "react";
+import { Link } from "react-router-dom";
 import Navbar from "@/components/layout/Navbar";
 import LeftSidebar from "@/components/layout/LeftSidebar";
 import RightSidebar from "@/components/layout/RightSidebar";
 import PostList from "@/components/feed/PostList";
 import CommunityHeader from "@/components/community/CommunityHeader";
+import { Button } from "@/components/ui/button";
+import { Users } from "lucide-react";
 
 const Index = () => {
   const isCommunityPage = false; // Toggle this to see community header
@@ -22,6 +24,20 @@ const Index = () => {
         {/* Main Content */}
         <main className="flex-1 sm:ml-56 lg:mr-72">
           <div className="max-w-3xl mx-auto py-4 px-4">
+            {/* Community Creation Banner */}
+            <div className="bg-card mb-6 rounded-lg p-4 flex items-center justify-between">
+              <div>
+                <h2 className="text-lg font-semibold">Create your own community</h2>
+                <p className="text-sm text-muted-foreground">Join thousands of community creators on ForumX</p>
+              </div>
+              <Link to="/create-community">
+                <Button className="flex items-center gap-2">
+                  <Users size={18} />
+                  Create Community
+                </Button>
+              </Link>
+            </div>
+            
             {isCommunityPage && (
               <CommunityHeader 
                 name="Technology" 

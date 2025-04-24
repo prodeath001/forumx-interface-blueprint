@@ -1,10 +1,10 @@
-
 import React from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
-import { ArrowUp, Plus } from "lucide-react";
+import { ArrowUp, Plus, Users } from "lucide-react";
 import { Separator } from "@/components/ui/separator";
+import { Link } from "react-router-dom";
 
 const UserProfileSummary = () => {
   return (
@@ -63,9 +63,14 @@ const RightSidebar = () => {
         {/* Create Post Card */}
         <Card>
           <CardContent className="pt-4">
-            <Button className="w-full flex items-center gap-1">
+            <Button className="w-full flex items-center gap-1 mb-2">
               <Plus size={16} /> Create Post
             </Button>
+            <Link to="/create-community">
+              <Button variant="outline" className="w-full flex items-center gap-1">
+                <Users size={16} /> Create Community
+              </Button>
+            </Link>
           </CardContent>
         </Card>
 

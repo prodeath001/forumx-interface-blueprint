@@ -1,4 +1,3 @@
-
 import React from "react";
 import { Card, CardContent, CardFooter, CardHeader } from "@/components/ui/card";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
@@ -11,6 +10,7 @@ import {
   TooltipProvider,
   TooltipTrigger 
 } from "@/components/ui/tooltip";
+import { useNavigate } from "react-router-dom";
 
 export type PostProps = {
   id: string;
@@ -31,6 +31,7 @@ export type PostProps = {
 };
 
 const Post = ({
+  id,
   communityName,
   communityIcon,
   username,
@@ -46,8 +47,24 @@ const Post = ({
   saved = false,
   onClick,
 }: PostProps) => {
+  const navigate = useNavigate();
   const voteCount = upvotes - downvotes;
   const formattedVoteCount = Math.abs(voteCount) > 999 ? `${(Math.abs(voteCount) / 1000).toFixed(1)}k` : voteCount;
+  
+  const handleCommunityClick = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    navigate(`/community/${communityName}`);
+  };
+  
+  const handleUserClick = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    navigate(`/user/${username}`);
+  };
+  
+  const handleCommentClick = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    navigate(`/post/${id}`);
+  };
   
   return (
     <Card className="post-card mb-3 cursor-pointer" onClick={onClick}>
@@ -86,12 +103,19 @@ const Post = ({
                     <AvatarFallback>{communityName.substring(0, 2)}</AvatarFallback>
                   </Avatar>
                 ) : null}
-                <span className="font-medium hover:underline">r/{communityName}</span>
+                <span 
+                  className="font-medium hover:underline" 
+                  onClick={handleCommunityClick}
+                >
+                  r/{communityName}
+                </span>
               </div>
               
               <span>•</span>
               
-              <span>Posted by u/{username}</span>
+              <span className="hover:underline" onClick={handleUserClick}>
+                Posted by u/{username}
+              </span>
               
               <span>•</span>
               
@@ -128,7 +152,7 @@ const Post = ({
                     variant="ghost" 
                     size="sm" 
                     className="flex items-center gap-1 text-muted-foreground hover:text-foreground"
-                    onClick={(e) => { e.stopPropagation(); }}
+                    onClick={handleCommentClick}
                   >
                     <MessageCircle size={16} />
                     <span className="text-sm">{commentCount} Comments</span>
