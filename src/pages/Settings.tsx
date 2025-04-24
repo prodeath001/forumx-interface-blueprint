@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import Navbar from "@/components/layout/Navbar";
 import LeftSidebar from "@/components/layout/LeftSidebar";
 import { Button } from "@/components/ui/button";
@@ -11,20 +11,84 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Camera, LockKeyhole, Bell, Eye, Monitor, Moon, Palette, Shield, UserCircle } from "lucide-react";
+import authService from "@/lib/authService";
+import { useToast } from "@/components/ui/use-toast";
+import { useNavigate } from "react-router-dom";
+import { Skeleton } from "@/components/ui/skeleton";
 
 const Settings = () => {
-  // Mock data for user settings
-  const [displayName, setDisplayName] = useState("Alex Johnson");
-  const [username, setUsername] = useState("TechEnthusiast");
-  const [email, setEmail] = useState("alex@example.com");
-  const [bio, setBio] = useState("Software engineer passionate about web development and open source. Working on interesting projects and sharing knowledge with the community.");
+  const [displayName, setDisplayName] = useState("");
+  const [username, setUsername] = useState("");
+  const [email, setEmail] = useState("");
+  const [bio, setBio] = useState("");
+  const [avatar, setAvatar] = useState("");
   const [theme, setTheme] = useState("system");
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
   
-  const handleSaveProfile = (e: React.FormEvent) => {
+  const { toast } = useToast();
+  const navigate = useNavigate();
+  
+  useEffect(() => {
+    // Check if user is authenticated
+    if (!authService.isAuthenticated()) {
+      navigate('/login?redirect=/settings');
+      return;
+    }
+    
+    // Load user data
+    const loadUserData = async () => {
+      try {
+        setLoading(true);
+        const userData = await authService.getProfile();
+        
+        setDisplayName(userData.displayName || '');
+        setUsername(userData.username || '');
+        setEmail(userData.email || '');
+        setBio(userData.bio || '');
+        setAvatar(userData.avatar || '');
+      } catch (error) {
+        console.error('Error loading user data:', error);
+        toast({
+          title: "Error",
+          description: "Failed to load your profile information. Please try again.",
+          variant: "destructive"
+        });
+      } finally {
+        setLoading(false);
+      }
+    };
+    
+    loadUserData();
+  }, [navigate, toast]);
+  
+  const handleSaveProfile = async (e: React.FormEvent) => {
     e.preventDefault();
-    // In a real application, this would send data to an API
-    console.log({ displayName, username, email, bio });
-    // Show success message
+    
+    try {
+      setSaving(true);
+      
+      // Update profile through authService
+      await authService.updateProfile({
+        displayName,
+        bio,
+        avatar
+      });
+      
+      toast({
+        title: "Success",
+        description: "Your profile has been updated successfully.",
+      });
+    } catch (error) {
+      console.error('Error saving profile:', error);
+      toast({
+        title: "Error",
+        description: "Failed to update your profile. Please try again.",
+        variant: "destructive"
+      });
+    } finally {
+      setSaving(false);
+    }
   };
 
   return (
@@ -101,10 +165,14 @@ const Settings = () => {
                         <form onSubmit={handleSaveProfile} className="space-y-6">
                           <div className="space-y-2">
                             <div className="flex items-center gap-4">
-                              <Avatar className="h-20 w-20">
-                                <AvatarImage src="https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=128&h=128&auto=format&fit=crop" />
-                                <AvatarFallback>AJ</AvatarFallback>
-                              </Avatar>
+                              {loading ? (
+                                <Skeleton className="h-20 w-20 rounded-full" />
+                              ) : (
+                                <Avatar className="h-20 w-20">
+                                  <AvatarImage src={avatar} />
+                                  <AvatarFallback>{displayName.slice(0, 2)}</AvatarFallback>
+                                </Avatar>
+                              )}
                               <div>
                                 <Button variant="outline" size="sm" className="flex items-center gap-1">
                                   <Camera size={14} />
@@ -119,12 +187,16 @@ const Settings = () => {
                               <Label htmlFor="displayName" className="text-right">
                                 Display Name
                               </Label>
-                              <Input
-                                id="displayName"
-                                value={displayName}
-                                onChange={(e) => setDisplayName(e.target.value)}
-                                className="col-span-3"
-                              />
+                              {loading ? (
+                                <Skeleton className="h-10 col-span-3" />
+                              ) : (
+                                <Input
+                                  id="displayName"
+                                  value={displayName}
+                                  onChange={(e) => setDisplayName(e.target.value)}
+                                  className="col-span-3"
+                                />
+                              )}
                             </div>
                             
                             <div className="grid grid-cols-4 items-center gap-4">
@@ -133,12 +205,18 @@ const Settings = () => {
                               </Label>
                               <div className="col-span-3 flex items-center gap-2">
                                 <span>u/</span>
-                                <Input
-                                  id="username"
-                                  value={username}
-                                  onChange={(e) => setUsername(e.target.value)}
-                                  className="flex-1"
-                                />
+                                {loading ? (
+                                  <Skeleton className="h-10 flex-1" />
+                                ) : (
+                                  <Input
+                                    id="username"
+                                    value={username}
+                                    readOnly
+                                    disabled
+                                    title="Username cannot be changed"
+                                    className="flex-1 opacity-70"
+                                  />
+                                )}
                               </div>
                             </div>
                             
@@ -146,31 +224,43 @@ const Settings = () => {
                               <Label htmlFor="email" className="text-right">
                                 Email
                               </Label>
-                              <Input
-                                id="email"
-                                type="email"
-                                value={email}
-                                onChange={(e) => setEmail(e.target.value)}
-                                className="col-span-3"
-                              />
+                              {loading ? (
+                                <Skeleton className="h-10 col-span-3" />
+                              ) : (
+                                <Input
+                                  id="email"
+                                  type="email"
+                                  value={email}
+                                  readOnly
+                                  disabled
+                                  title="Email cannot be changed here"
+                                  className="col-span-3 opacity-70"
+                                />
+                              )}
                             </div>
                             
                             <div className="grid grid-cols-4 items-center gap-4">
                               <Label htmlFor="bio" className="text-right">
                                 Bio
                               </Label>
-                              <Textarea
-                                id="bio"
-                                value={bio}
-                                onChange={(e) => setBio(e.target.value)}
-                                className="col-span-3"
-                                rows={4}
-                              />
+                              {loading ? (
+                                <Skeleton className="h-24 col-span-3" />
+                              ) : (
+                                <Textarea
+                                  id="bio"
+                                  value={bio}
+                                  onChange={(e) => setBio(e.target.value)}
+                                  className="col-span-3"
+                                  rows={4}
+                                />
+                              )}
                             </div>
                           </div>
                           
                           <div className="flex justify-end">
-                            <Button type="submit">Save Changes</Button>
+                            <Button type="submit" disabled={loading || saving}>
+                              {saving ? "Saving..." : "Save Changes"}
+                            </Button>
                           </div>
                         </form>
                       </CardContent>

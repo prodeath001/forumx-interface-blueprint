@@ -1,22 +1,69 @@
-import React from "react";
+import React, { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { ArrowUp, Plus, Users } from "lucide-react";
 import { Separator } from "@/components/ui/separator";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
+import authService from "@/lib/authService";
+import { Skeleton } from "@/components/ui/skeleton";
+import communityService, { CommunitySummary } from "@/lib/communityService";
+import { formatMembers } from "@/lib/utils";
 
 const UserProfileSummary = () => {
+  const [userData, setUserData] = useState<any>(null);
+  const [loading, setLoading] = useState(true);
+  const navigate = useNavigate();
+
+  useEffect(() => {
+    const fetchUserData = async () => {
+      try {
+        const user = authService.getUser();
+        if (user) {
+          setUserData(user);
+        }
+      } catch (error) {
+        console.error('Error getting user data:', error);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchUserData();
+  }, []);
+
+  if (!userData && !loading) {
+    return null; // Don't show anything if not logged in
+  }
+
+  const handleViewProfile = () => {
+    if (userData) {
+      navigate(`/user/${userData.username}`);
+    }
+  };
+
   return (
     <div className="flex items-center space-x-3 mb-2">
-      <Avatar className="h-8 w-8">
-        <AvatarImage src="https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=128&h=128&auto=format&fit=crop" />
-        <AvatarFallback>FX</AvatarFallback>
-      </Avatar>
-      <div>
-        <p className="font-medium text-sm">username123</p>
-        <p className="text-xs text-muted-foreground">Karma: 2,458</p>
-      </div>
+      {loading ? (
+        <>
+          <Skeleton className="h-8 w-8 rounded-full" />
+          <div>
+            <Skeleton className="h-4 w-24 mb-1" />
+            <Skeleton className="h-3 w-16" />
+          </div>
+        </>
+      ) : (
+        <>
+          <Avatar className="h-8 w-8">
+            <AvatarImage src={userData?.avatar} />
+            <AvatarFallback>{userData?.displayName?.substring(0, 2) || userData?.username?.substring(0, 2) || "FX"}</AvatarFallback>
+          </Avatar>
+          <div>
+            <p className="font-medium text-sm">{userData?.displayName || userData?.username}</p>
+            <p className="text-xs text-muted-foreground">Karma: {userData?.stats?.karma || 0}</p>
+          </div>
+        </>
+      )}
     </div>
   );
 };
@@ -41,32 +88,65 @@ const CommunityItem = ({ name, members, icon }: { name: string; members: string;
 };
 
 const RightSidebar = () => {
-  const growingCommunities = [
-    { name: "Photography", members: "452K", icon: "https://images.unsplash.com/photo-1516035069371-29a1b244cc32?w=48&h=48&auto=format&fit=crop" },
-    { name: "CryptoCurrency", members: "327K" },
-    { name: "AskForumX", members: "256K" },
-    { name: "LifeProTips", members: "189K" },
-    { name: "Fitness", members: "143K", icon: "https://images.unsplash.com/photo-1517836357463-d25dfeac3438?w=48&h=48&auto=format&fit=crop" },
-  ];
+  const [isLoggedIn, setIsLoggedIn] = useState(false);
+  const [communities, setCommunities] = useState<CommunitySummary[]>([]);
+  const [loadingCommunities, setLoadingCommunities] = useState(true);
+  const navigate = useNavigate();
+
+  useEffect(() => {
+    setIsLoggedIn(authService.isAuthenticated());
+
+    const fetchCommunities = async () => {
+      setLoadingCommunities(true);
+      try {
+        const fetchedCommunities = await communityService.getCommunities("growing", 5);
+        setCommunities(fetchedCommunities);
+      } catch (error) {
+        console.error("Error fetching communities:", error);
+        // Optionally set an error state to display message
+      } finally {
+        setLoadingCommunities(false);
+      }
+    };
+
+    fetchCommunities();
+  }, []);
 
   return (
     <aside className="hidden lg:block fixed top-14 right-0 bottom-0 w-72 p-4 overflow-auto">
       <div className="space-y-4">
         {/* User Profile Card */}
-        <Card>
-          <CardContent className="pt-4">
-            <UserProfileSummary />
-            <Button variant="outline" className="w-full mt-2">View Profile</Button>
-          </CardContent>
-        </Card>
+        {isLoggedIn && (
+          <Card>
+            <CardContent className="pt-4">
+              <UserProfileSummary />
+              <Button 
+                variant="outline" 
+                className="w-full mt-2" 
+                onClick={() => navigate(`/user/${authService.getUser()?.username}`)}
+              >
+                View Profile
+              </Button>
+            </CardContent>
+          </Card>
+        )}
 
         {/* Create Post Card */}
         <Card>
           <CardContent className="pt-4">
-            <Button className="w-full flex items-center gap-1 mb-2">
+            <Button 
+              className="w-full flex items-center gap-1 mb-2"
+              onClick={() => {
+                if (isLoggedIn) {
+                  navigate('/create-post');
+                } else {
+                  navigate('/login?redirect=/create-post');
+                }
+              }}
+            >
               <Plus size={16} /> Create Post
             </Button>
-            <Link to="/create-community">
+            <Link to={isLoggedIn ? "/create-community" : "/login?redirect=/create-community"}>
               <Button variant="outline" className="w-full flex items-center gap-1">
                 <Users size={16} /> Create Community
               </Button>
@@ -83,16 +163,32 @@ const RightSidebar = () => {
             </CardTitle>
           </CardHeader>
           <CardContent className="pt-0">
-            {growingCommunities.map((community, index) => (
-              <React.Fragment key={community.name}>
-                {index > 0 && <Separator className="my-2" />}
-                <CommunityItem 
-                  name={community.name} 
-                  members={community.members} 
-                  icon={community.icon} 
-                />
-              </React.Fragment>
-            ))}
+            {loadingCommunities ? (
+              <div className="space-y-3 pt-2">
+                {[...Array(5)].map((_, i) => (
+                  <div key={i} className="flex items-center space-x-2">
+                    <Skeleton className="h-8 w-8 rounded-full" />
+                    <div className="space-y-1">
+                      <Skeleton className="h-4 w-24" />
+                      <Skeleton className="h-3 w-16" />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : communities.length > 0 ? (
+              communities.map((community, index) => (
+                <React.Fragment key={community.id}>
+                  {index > 0 && <Separator className="my-2" />}
+                  <CommunityItem 
+                    name={community.name} 
+                    members={formatMembers(community.memberCount)} 
+                    icon={community.icon} 
+                  />
+                </React.Fragment>
+              ))
+            ) : (
+              <p className="text-sm text-muted-foreground py-4 text-center">No communities found.</p>
+            )}
           </CardContent>
         </Card>
 

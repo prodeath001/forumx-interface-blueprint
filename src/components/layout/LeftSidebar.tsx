@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { 
   Home, 
@@ -11,6 +11,9 @@ import { Separator } from "@/components/ui/separator";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { useNavigate, useLocation } from "react-router-dom";
+import communityService, { CommunitySummary } from "@/lib/communityService";
+import authService from "@/lib/authService";
+import { Skeleton } from "@/components/ui/skeleton";
 
 type NavItemProps = {
   icon: React.ReactNode;
@@ -24,7 +27,6 @@ const NavItem = ({ icon, label, path, active = false, onClick }: NavItemProps) =
   const navigate = useNavigate();
   const location = useLocation();
   
-  // If active is not explicitly provided, check if current path matches
   const isActive = active || location.pathname === path;
   
   const handleClick = () => {
@@ -67,7 +69,6 @@ const CommunityItem = ({ name, image, active = false }: CommunityItemProps) => {
   const location = useLocation();
   const path = `/community/${name}`;
   
-  // Check if we're on this community's page
   const isActive = active || location.pathname === path;
   
   const fallbackText = name.slice(0, 2).toUpperCase();
@@ -101,21 +102,46 @@ const CommunityItem = ({ name, image, active = false }: CommunityItemProps) => {
 
 const LeftSidebar = () => {
   const navigate = useNavigate();
-  
-  // Sample community data
-  const communities = [
-    { name: "Technology", image: "" },
-    { name: "Science", image: "" },
-    { name: "Gaming", image: "https://images.unsplash.com/photo-1600861194942-f883de0dfe96?w=48&h=48&auto=format&fit=crop" },
-    { name: "Movies", image: "" },
-    { name: "Music", image: "" },
-    { name: "Books", image: "" },
-    { name: "Art", image: "https://images.unsplash.com/photo-1513364776144-60967b0f800f?w=48&h=48&auto=format&fit=crop" },
-    { name: "Food", image: "" },
-    { name: "Sports", image: "https://images.unsplash.com/photo-1587280501635-68a0e82cd5ff?w=48&h=48&auto=format&fit=crop" },
-    { name: "Programming", image: "" },
-  ];
+  const [communities, setCommunities] = useState<CommunitySummary[]>([]);
+  const [loadingCommunities, setLoadingCommunities] = useState(false);
+  const [isLoggedIn, setIsLoggedIn] = useState(false);
 
+  useEffect(() => {
+    setIsLoggedIn(authService.isAuthenticated());
+
+    const fetchSubscribedCommunities = async () => {
+      if (authService.isAuthenticated()) {
+        setLoadingCommunities(true);
+        try {
+          const subs = await communityService.getSubscribedCommunities();
+          setCommunities(subs);
+        } catch (error) {
+          console.error("Error fetching subscribed communities:", error);
+        } finally {
+          setLoadingCommunities(false);
+        }
+      } else {
+        setCommunities([]);
+      }
+    };
+
+    fetchSubscribedCommunities();
+
+    const handleAuthChange = () => {
+      const currentAuthStatus = authService.isAuthenticated();
+      if (currentAuthStatus !== isLoggedIn) {
+         setIsLoggedIn(currentAuthStatus);
+         fetchSubscribedCommunities();
+      }
+    };
+    window.addEventListener('storage', handleAuthChange);
+
+    return () => {
+      window.removeEventListener('storage', handleAuthChange);
+    };
+
+  }, [isLoggedIn]);
+  
   return (
     <aside className="hidden sm:block fixed top-14 left-0 bottom-0 w-56 bg-sidebar border-r border-sidebar-border overflow-hidden">
       <ScrollArea className="h-full py-4">
@@ -131,23 +157,38 @@ const LeftSidebar = () => {
           />
         </div>
         
-        <Separator className="my-4" />
+        {isLoggedIn && (
+          <>
+            <Separator className="my-4" />
+            
+            <div className="px-4 mb-2">
+              <h3 className="text-sm font-medium text-sidebar-foreground">Subscribed Communities</h3>
+            </div>
+            
+            <div className="space-y-1 px-2">
+              {loadingCommunities ? (
+                [...Array(3)].map((_, i) => (
+                  <div key={i} className="flex items-center space-x-2 p-2">
+                    <Skeleton className="h-6 w-6 rounded-full" />
+                    <Skeleton className="h-4 w-32" />
+                  </div>
+                ))
+              ) : communities.length > 0 ? (
+                communities.map((community) => (
+                  <CommunityItem 
+                    key={community.id} 
+                    name={community.name} 
+                    image={community.icon}
+                  />
+                ))
+              ) : (
+                <p className="text-xs text-muted-foreground px-4">You haven't joined any communities yet.</p>
+              )}
+            </div>
+          </>
+        )}
         
-        <div className="px-4 mb-2">
-          <h3 className="text-sm font-medium text-sidebar-foreground">Subscribed Communities</h3>
-        </div>
-        
-        <div className="space-y-1 px-2">
-          {communities.map((community) => (
-            <CommunityItem 
-              key={community.name} 
-              name={community.name} 
-              image={community.image}
-            />
-          ))}
-        </div>
-        
-        <div className="px-2 mt-4 flex flex-col gap-2">
+        <div className="px-2 mt-4 flex flex-col gap-2 absolute bottom-4 left-0 right-0">
           <Button className="w-full flex items-center gap-1" onClick={() => navigate("/create-post")}>
             <Plus size={16} /> Create Post
           </Button>

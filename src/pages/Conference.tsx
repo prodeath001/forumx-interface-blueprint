@@ -8,7 +8,7 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Separator } from "@/components/ui/separator";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Textarea } from "@/components/ui/textarea";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogFooter } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogFooter, DialogDescription } from "@/components/ui/dialog";
 import { 
   Video, 
   VideoOff, 
@@ -33,7 +33,15 @@ import {
   Users2,
   DoorOpen,
   Home,
-  Crown
+  Crown,
+  UserCircle,
+  AlertCircle,
+  Wifi,
+  WifiOff,
+  Monitor,
+  Maximize,
+  RefreshCw,
+  Check
 } from "lucide-react";
 import { cloudinaryService } from "@/lib/cloudinaryService";
 import conferenceService, { 
@@ -44,6 +52,15 @@ import conferenceService, {
 } from "@/lib/conferenceService";
 import { uuid } from '@/lib/utils';
 import { interactionsService, ItemType } from "@/lib/interactionsService";
+import { 
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue
+} from "@/components/ui/select";
+import { Slider } from "@/components/ui/slider";
+import { Label } from "@/components/ui/label";
 
 type Message = {
   id: string;
@@ -93,6 +110,16 @@ const Conference = () => {
   const [isPrivateCommunity, setIsPrivateCommunity] = useState(false);
   const [roomCommunity, setRoomCommunity] = useState<CommunityInfo | null>(null);
   const [isCheckingCommunity, setIsCheckingCommunity] = useState(false);
+  const [isScreenSharing, setIsScreenSharing] = useState(false);
+  const [roomPrivacy, setRoomPrivacy] = useState<'public' | 'private'>('public');
+  const [roomTemplate, setRoomTemplate] = useState<string>('standard');
+  const [roomDescription, setRoomDescription] = useState<string>('');
+  const [roomCapacity, setRoomCapacity] = useState<number>(10);
+  const [roomTemplates, setRoomTemplates] = useState([
+    { id: 'standard', name: 'Standard Meeting', description: 'General purpose meeting room' },
+    { id: 'classroom', name: 'Classroom', description: 'Layout optimized for teaching' },
+    { id: 'webinar', name: 'Webinar', description: 'Presentation-focused with audience management' }
+  ]);
   
   const scrollRef = useRef<HTMLDivElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -104,6 +131,23 @@ const Conference = () => {
 
   // State for connection status
   const [connectionError, setConnectionError] = useState<string | null>(null);
+
+  // Add these state variables with the other state declarations
+  const [showInviteDialog, setShowInviteDialog] = useState(false);
+  const [inviteEmail, setInviteEmail] = useState("");
+  const [inviteEmails, setInviteEmails] = useState<string[]>([]);
+  const [isInviting, setIsInviting] = useState(false);
+  const [inviteSuccess, setInviteSuccess] = useState<string | null>(null);
+  const [inviteError, setInviteError] = useState<string | null>(null);
+
+  // Add a state for room creation errors
+  const [roomCreationError, setRoomCreationError] = useState<string | null>(null);
+
+  const [showAvatarDialog, setShowAvatarDialog] = useState(false);
+  const [avatarUrl, setAvatarUrl] = useState<string>("https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=48&h=48&auto=format&fit=crop");
+  const [isChangingAvatar, setIsChangingAvatar] = useState(false);
+
+  const [isConnected, setIsConnected] = useState(false);
 
   useEffect(() => {
     // Initialize conference
@@ -120,6 +164,13 @@ const Conference = () => {
         // If no ID in URL, create a new conference
         if (!confId) {
           try {
+            // First check server connectivity
+            const isConnected = await conferenceService.checkServerConnectivity();
+            
+            if (!isConnected) {
+              throw new Error('Cannot connect to conference server. Please check your internet connection and try again.');
+            }
+            
             const response = await fetch('http://localhost:5001/api/conferences', {
               method: 'POST',
               headers: {
@@ -139,6 +190,9 @@ const Conference = () => {
             window.history.pushState({ path: newUrl }, '', newUrl);
           } catch (error) {
             console.error("Failed to create conference:", error);
+            // Show error message to user
+            setConnectionError(error instanceof Error ? error.message : "Failed to create conference");
+            
             // If server is unavailable, create a temporary local ID
             confId = `local-${Date.now()}`;
             const newUrl = `${window.location.pathname}?id=${confId}`;
@@ -153,7 +207,11 @@ const Conference = () => {
         setConferenceId(confId);
         
         // Connect to conference service
-        conferenceService.connect();
+        const connectionSuccess = await conferenceService.connect();
+        
+        if (!connectionSuccess) {
+          setConnectionError('Failed to connect to conference server. You are in offline mode.');
+        }
         
         // Set up event listeners
         conferenceService.on('onConferenceJoined', handleConferenceJoined);
@@ -175,21 +233,40 @@ const Conference = () => {
           console.error("Conference service error:", error);
           setConnectionError(error.message || "Failed to connect to conference service");
         });
+        conferenceService.on('onScreenShareStarted', (participantId: string) => {
+          setParticipants(prev => 
+            prev.map(p => p.id === participantId ? { ...p, isScreenSharing: true } : p)
+          );
+        });
+        conferenceService.on('onScreenShareStopped', (participantId: string) => {
+          setParticipants(prev => 
+            prev.map(p => p.id === participantId ? { ...p, isScreenSharing: false } : p)
+          );
+        });
+        conferenceService.on('onHostChanged', handleHostChange);
         
-        // Join the conference
-        await conferenceService.joinConference(
-          confId,
-          {
-            id: `user-${Date.now()}`,
-            name: "Alex Johnson",
-            avatar: "https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=48&h=48&auto=format&fit=crop"
-          },
-          roomId,
-          isVideoOn,
-          isAudioOn
-        );
+        try {
+          // Join conference
+          await conferenceService.joinConference(
+            confId,
+            {
+              id: `user-${Date.now()}`,
+              name: "Alex Johnson",
+              avatar: avatarUrl
+            },
+            roomId,
+            isVideoOn,
+            isAudioOn
+          );
+
+          console.log(`Joined conference: ${confId}`);
+        } catch (joinError) {
+          console.error('Error joining conference:', joinError);
+          setConnectionError(joinError instanceof Error ? joinError.message : "Failed to join conference");
+        }
       } catch (error) {
-        console.error("Error initializing conference:", error);
+        console.error('Error initializing conference:', error);
+        setConnectionError(error instanceof Error ? error.message : "Failed to initialize conference");
       }
     };
     
@@ -204,39 +281,6 @@ const Conference = () => {
       conferenceService.disconnect();
     };
   }, []);
-
-  useEffect(() => {
-    // Access user media and store it in localStreamRef
-    const getMediaStream = async () => {
-      try {
-        if (isVideoOn || isAudioOn) {
-          const stream = await navigator.mediaDevices.getUserMedia({
-            video: isVideoOn,
-            audio: isAudioOn
-          });
-          
-          localStreamRef.current = stream;
-          
-          if (videoRef.current) {
-            videoRef.current.srcObject = stream;
-          }
-        } else if (localStreamRef.current) {
-          // Stop all tracks if both video and audio are off
-          localStreamRef.current.getTracks().forEach(track => track.stop());
-          localStreamRef.current = null;
-          
-          if (videoRef.current) {
-            videoRef.current.srcObject = null;
-          }
-        }
-      } catch (err) {
-        console.error("Error accessing media devices:", err);
-        setIsVideoOn(false);
-      }
-    };
-    
-    getMediaStream();
-  }, [isVideoOn, isAudioOn]);
 
   useEffect(() => {
     // Scroll chat to bottom when new messages are added
@@ -366,20 +410,48 @@ const Conference = () => {
   };
   
   const handleCreateRoom = async () => {
+    // Reset error
+    setRoomCreationError(null);
+    
     if (!newRoomName.trim()) {
-      alert('Please enter a room name');
+      setRoomCreationError("Please enter a room name");
+      return;
+    }
+    
+    // Check if conference is connected using the service method
+    if (!conferenceService.isConnectedToConference()) {
+      setRoomCreationError("Cannot create room: Not connected to a conference");
       return;
     }
     
     try {
-      const room = await conferenceService.createRoom(newRoomName.trim());
+      // Show loading indicator
+      const button = document.querySelector('[data-create-room-button]');
+      if (button) button.textContent = "Creating...";
+      
+      // Create room with additional parameters
+      const room = await conferenceService.createRoom({
+        name: newRoomName.trim(),
+        isPrivate: roomPrivacy === 'private',
+        template: roomTemplate,
+        description: roomDescription,
+        capacity: roomCapacity
+      });
+      
+      console.log("Room created successfully:", room);
+      
       setShowCreateRoomDialog(false);
-      setNewRoomName('');
+      resetRoomForm();
       
       // Automatically join the newly created room
       handleChangeRoom(room.id);
     } catch (error) {
       console.error('Error creating room:', error);
+      setRoomCreationError(error instanceof Error ? error.message : "Failed to create room");
+    } finally {
+      // Reset button text
+      const button = document.querySelector('[data-create-room-button]');
+      if (button) button.textContent = "Create Room";
     }
   };
 
@@ -718,54 +790,345 @@ const Conference = () => {
     }
   };
 
+  const handleScreenShare = async () => {
+    try {
+      if (!isScreenSharing) {
+        // Start screen sharing
+        await conferenceService.startScreenShare();
+        setIsScreenSharing(true);
+      } else {
+        // Stop screen sharing
+        conferenceService.stopScreenShare();
+        setIsScreenSharing(false);
+      }
+    } catch (error) {
+      console.error("Error toggling screen share:", error);
+      setIsScreenSharing(false);
+    }
+  };
+  
+  const handleHostChange = (newHostId: string) => {
+    // Update participant list to reflect new host
+    setParticipants(prev => 
+      prev.map(p => ({ ...p, isHost: p.id === newHostId }))
+    );
+    
+    // Update room participants if applicable
+    setRoomParticipants(prev => 
+      prev.map(p => ({ ...p, isHost: p.id === newHostId }))
+    );
+  };
+  
+  // Add a handler for leaving just the current room
+  const handleLeaveRoom = () => {
+    // Only perform this action if not in the main room
+    if (currentRoomId !== 'main') {
+      conferenceService.leaveRoom();
+      
+      // No need to update state here as the room-joined event will be triggered
+      // which will update the UI appropriately
+      console.log(`Leaving room: ${currentRoomId}`);
+    }
+  };
+  
+  const handleLeaveConference = () => {
+    // Leave the conference and redirect to home or another page
+    conferenceService.leaveConference();
+    conferenceService.disconnect();
+    
+    // Clear local streams
+    if (localStreamRef.current) {
+      localStreamRef.current.getTracks().forEach(track => track.stop());
+    }
+    
+    // Redirect to home page or another page
+    window.location.href = '/';
+  };
+
+  // Add a function to reset room form
+  const resetRoomForm = () => {
+    setNewRoomName('');
+    setRoomPrivacy('public');
+    setRoomTemplate('standard');
+    setRoomDescription('');
+    setRoomCapacity(10);
+  };
+
+  // Add function to handle Enter key in room name input
+  const handleRoomNameKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter' && newRoomName.trim()) {
+      e.preventDefault();
+      handleCreateRoom();
+    }
+  };
+
+  // Add function to handle inviting users
+  const handleInviteUser = async (e: React.FormEvent) => {
+    e.preventDefault();
+    
+    // Basic email validation
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    
+    // Reset states
+    setInviteError(null);
+    setInviteSuccess(null);
+    
+    if (!inviteEmail.trim()) {
+      setInviteError("Please enter an email address");
+      return;
+    }
+    
+    if (!emailRegex.test(inviteEmail)) {
+      setInviteError("Please enter a valid email address");
+      return;
+    }
+    
+    try {
+      setIsInviting(true);
+      
+      // Add email to the list
+      setInviteEmails([...inviteEmails, inviteEmail]);
+      
+      // Create invitation link with conference and room IDs
+      const inviteLink = `${window.location.origin}/conference?id=${conferenceId}&room=${currentRoomId}`;
+      
+      // In a real app, you would send this via your backend API
+      // For example:
+      // await fetch('/api/send-invitation', {
+      //   method: 'POST',
+      //   headers: { 'Content-Type': 'application/json' },
+      //   body: JSON.stringify({ email: inviteEmail, link: inviteLink })
+      // });
+      
+      console.log(`Invitation link for ${inviteEmail}: ${inviteLink}`);
+      
+      // Show success message
+      setInviteSuccess(`Invitation sent to ${inviteEmail}`);
+      
+      // Clear input
+      setInviteEmail("");
+    } catch (error) {
+      console.error("Error sending invitation:", error);
+      setInviteError("Failed to send invitation");
+    } finally {
+      setIsInviting(false);
+    }
+  };
+
+  // Add function to handle copying invitation link
+  const handleCopyInviteLink = () => {
+    const inviteLink = `${window.location.origin}/conference?id=${conferenceId}&room=${currentRoomId}`;
+    
+    navigator.clipboard.writeText(inviteLink)
+      .then(() => {
+        setInviteSuccess("Link copied to clipboard!");
+        setTimeout(() => setInviteSuccess(null), 3000);
+      })
+      .catch(() => {
+        setInviteError("Failed to copy link");
+        setTimeout(() => setInviteError(null), 3000);
+      });
+  };
+
+  // Add function to remove an invited email
+  const handleRemoveInvitedEmail = (email: string) => {
+    setInviteEmails(inviteEmails.filter(e => e !== email));
+  };
+
+  // Add handler for avatar change
+  const handleAvatarChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
+    
+    try {
+      setIsChangingAvatar(true);
+      const file = files[0];
+      
+      // Convert file to base64
+      const base64 = await fileToBase64(file);
+      
+      // Upload to Cloudinary
+      const uploadResult = await cloudinaryService.uploadFromBase64(
+        base64 as string,
+        {
+          folder: 'avatar'
+        }
+      );
+      
+      if (uploadResult?.secureUrl) {
+        setAvatarUrl(uploadResult.secureUrl);
+        
+        // Update participant info
+        const updates = { avatar: uploadResult.secureUrl };
+        conferenceService.updateParticipantInfo(updates);
+        
+        setShowAvatarDialog(false);
+      }
+    } catch (error) {
+      console.error("Error changing avatar:", error);
+    } finally {
+      setIsChangingAvatar(false);
+    }
+  };
+
+  // Helper function to convert file to base64
+  const fileToBase64 = (file: File): Promise<string | ArrayBuffer> => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.readAsDataURL(file);
+      reader.onload = () => resolve(reader.result as string);
+      reader.onerror = (error) => reject(error);
+    });
+  };
+
+  useEffect(() => {
+    // Check connection status periodically
+    const checkConnection = () => {
+      const connected = conferenceService.isConnectedToConference();
+      setIsConnected(connected);
+    };
+    
+    // Check immediately
+    checkConnection();
+    
+    // Then check every 5 seconds
+    const interval = setInterval(checkConnection, 5000);
+    
+    return () => clearInterval(interval);
+  }, []);
+
+  // Add function to reconnect to conference
+  const handleReconnect = async () => {
+    setConnectionError("Attempting to reconnect...");
+    
+    try {
+      // First try normal reconnect
+      let success = await conferenceService.reconnect();
+      
+      // If normal reconnect fails, try hard reset
+      if (!success) {
+        console.log("Normal reconnect failed, attempting hard reset...");
+        setConnectionError("Normal reconnection failed. Attempting hard reset...");
+        
+        success = await conferenceService.hardReset();
+      }
+      
+      if (success) {
+        setConnectionError(null);
+        
+        // Re-join the conference
+        await conferenceService.joinConference(
+          conferenceId,
+          {
+            id: `user-${Date.now()}`,
+            name: "Alex Johnson",
+            avatar: avatarUrl
+          },
+          currentRoomId,
+          isVideoOn,
+          isAudioOn
+        );
+        
+        console.log("Successfully reconnected to conference");
+      } else {
+        setConnectionError("Failed to reconnect. Please refresh the page and try again.");
+      }
+    } catch (error) {
+      console.error("Error reconnecting:", error);
+      setConnectionError(error instanceof Error ? error.message : "Failed to reconnect");
+    }
+  };
+  
+  // Add function for hard reset (completely resets connection)
+  const handleHardReset = async () => {
+    setConnectionError("Performing hard reset of connection...");
+    
+    try {
+      const success = await conferenceService.hardReset();
+      
+      if (success) {
+        setConnectionError(null);
+        
+        // Re-join the conference
+        await conferenceService.joinConference(
+          conferenceId,
+          {
+            id: `user-${Date.now()}`,
+            name: "Alex Johnson",
+            avatar: avatarUrl
+          },
+          currentRoomId,
+          isVideoOn,
+          isAudioOn
+        );
+        
+        console.log("Successfully reconnected after hard reset");
+      } else {
+        setConnectionError("Hard reset failed. Please refresh the page.");
+      }
+    } catch (error) {
+      console.error("Error during hard reset:", error);
+      setConnectionError(error instanceof Error ? error.message : "Hard reset failed");
+    }
+  };
+
+  useEffect(() => {
+    // Access user media and store it in localStreamRef
+    const getMediaStream = async () => {
+      try {
+        if (isVideoOn || isAudioOn) {
+          const stream = await navigator.mediaDevices.getUserMedia({
+            video: isVideoOn,
+            audio: isAudioOn
+          });
+          
+          localStreamRef.current = stream;
+          
+          if (videoRef.current) {
+            videoRef.current.srcObject = stream;
+          }
+        } else if (localStreamRef.current) {
+          // Stop all tracks if both video and audio are off
+          localStreamRef.current.getTracks().forEach(track => track.stop());
+          localStreamRef.current = null;
+          
+          if (videoRef.current) {
+            videoRef.current.srcObject = null;
+          }
+        }
+      } catch (err) {
+        console.error("Error accessing media devices:", err);
+        setIsVideoOn(false);
+        setIsAudioOn(false);
+      }
+    };
+    
+    getMediaStream();
+  }, [isVideoOn, isAudioOn]);
+
   return (
     <div className="min-h-screen bg-background">
       <Navbar />
       <div className="flex">
         <LeftSidebar />
         <main className="flex-1 p-2 md:p-4">
+          {/* Connection error alert */}
           {connectionError && (
-            <div className="bg-destructive/10 border border-destructive text-destructive rounded-md p-4 mb-4">
+            <div className="bg-red-50 border-l-4 border-red-400 p-4 mb-4 mx-4 mt-4 rounded-md flex items-center justify-between">
               <div className="flex items-center">
-                <div className="flex-shrink-0">
-                  {/* Warning icon */}
-                  <svg className="h-5 w-5" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor">
-                    <path fillRule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
-                  </svg>
+                <AlertCircle className="h-5 w-5 text-red-500 mr-2" />
+                <div>
+                  <p className="text-red-800 font-medium">{connectionError}</p>
+                  <p className="text-red-600 text-sm">You are currently in offline mode. Some features may be limited.</p>
                 </div>
-                <div className="ml-3">
-                  <h3 className="text-sm font-medium">Connection Error</h3>
-                  <div className="mt-1 text-sm">
-                    {connectionError}. You are currently in offline mode.
-                  </div>
-                  <div className="mt-3">
-                    <Button 
-                      size="sm" 
-                      variant="outline" 
-                      onClick={() => {
-                        // Attempt to reconnect
-                        conferenceService.connect();
-                        setTimeout(() => {
-                          if (conferenceId) {
-                            conferenceService.joinConference(
-                              conferenceId,
-                              {
-                                id: `user-${Date.now()}`,
-                                name: "Alex Johnson",
-                                avatar: "https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=48&h=48&auto=format&fit=crop"
-                              },
-                              currentRoomId,
-                              isVideoOn,
-                              isAudioOn
-                            );
-                          }
-                        }, 1000);
-                      }}
-                    >
-                      Try Again
-                    </Button>
-                  </div>
-                </div>
+              </div>
+              <div className="flex space-x-2">
+                <Button onClick={handleReconnect} variant="secondary" size="sm" className="whitespace-nowrap">
+                  <RefreshCw className="h-4 w-4 mr-2" /> Reconnect
+                </Button>
+                <Button onClick={handleHardReset} variant="outline" size="sm" className="whitespace-nowrap">
+                  Hard Reset
+                </Button>
               </div>
             </div>
           )}
@@ -784,8 +1147,40 @@ const Conference = () => {
                   <Button variant="outline" size="sm" onClick={() => handleMediaToggle('audio')}>
                     {isAudioOn ? <Mic className="h-4 w-4" /> : <MicOff className="h-4 w-4" />}
                   </Button>
-                  <Button variant="destructive" size="sm">
-                    <PhoneOff className="h-4 w-4 mr-1" /> Leave
+                  <Button 
+                    variant="outline" 
+                    size="sm" 
+                    onClick={handleScreenShare}
+                    className={isScreenSharing ? "bg-primary/10" : ""}
+                  >
+                    <LayoutGrid className="h-4 w-4" />
+                  </Button>
+                  <Button 
+                    variant="outline" 
+                    size="sm" 
+                    onClick={captureAndUploadSnapshot}
+                    disabled={!isVideoOn || uploadingMedia}
+                  >
+                    <Camera className="h-4 w-4" />
+                  </Button>
+                  <Button 
+                    variant="outline" 
+                    size="sm" 
+                    onClick={() => setShowAvatarDialog(true)}
+                  >
+                    <UserCircle className="h-4 w-4" />
+                  </Button>
+                  <Button 
+                    variant={isRecording ? "default" : "outline"}
+                    size="sm" 
+                    onClick={toggleRecording}
+                    disabled={!isVideoOn || uploadingMedia}
+                    className={isRecording ? "bg-red-500 text-white" : ""}
+                  >
+                    <Settings className={`h-4 w-4 ${isRecording ? "animate-spin" : ""}`} />
+                  </Button>
+                  <Button variant="destructive" size="sm" onClick={handleLeaveConference}>
+                    <PhoneOff className="h-4 w-4 mr-1" /> Leave Conference
                   </Button>
                 </div>
               </div>
@@ -898,7 +1293,29 @@ const Conference = () => {
                 {/* Current Room Info */}
                 {currentRoomId && (
                   <div className="mt-3 p-2 bg-accent/50 rounded-md">
-                    <h4 className="text-sm font-medium">Currently in: {rooms.find(r => r.id === currentRoomId)?.name || currentRoomId}</h4>
+                    <div className="flex justify-between items-center">
+                      <h4 className="text-sm font-medium">Currently in: {rooms.find(r => r.id === currentRoomId)?.name || currentRoomId}</h4>
+                      <div className="flex space-x-1">
+                        {currentRoomId !== 'main' && (
+                          <Button 
+                            size="sm" 
+                            variant="outline" 
+                            onClick={handleLeaveRoom} 
+                            className="text-xs"
+                          >
+                            <LogOut className="h-3 w-3 mr-1" /> Leave Room
+                          </Button>
+                        )}
+                        <Button 
+                          size="sm" 
+                          variant="ghost" 
+                          onClick={() => setShowInviteDialog(true)} 
+                          className="text-xs"
+                        >
+                          <Users className="h-3 w-3 mr-1" /> Invite
+                        </Button>
+                      </div>
+                    </div>
                     <div className="flex items-center mt-1 text-xs text-muted-foreground">
                       <Users2 className="mr-1 h-3 w-3" />
                       <span>{roomParticipants.length} participants</span>
@@ -1080,26 +1497,122 @@ const Conference = () => {
       
       {/* Create Room Dialog */}
       <Dialog open={showCreateRoomDialog} onOpenChange={setShowCreateRoomDialog}>
-        <DialogContent>
+        <DialogContent className="sm:max-w-md">
           <DialogHeader>
             <DialogTitle>Create New Room</DialogTitle>
+            <DialogDescription>
+              Create a custom room for your conference needs
+            </DialogDescription>
           </DialogHeader>
-          <div className="py-4">
-            <div className="space-y-4">
-              <div>
-                <label htmlFor="roomName" className="text-sm font-medium block mb-1">Room Name</label>
-                <Input
-                  id="roomName"
-                  placeholder="Enter room name"
-                  value={newRoomName}
-                  onChange={e => setNewRoomName(e.target.value)}
-                />
+          
+          {/* Connection status indicator */}
+          <div className={`flex items-center gap-2 p-2 rounded-md ${isConnected ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-700'}`}>
+            {isConnected ? <Wifi size={16} /> : <WifiOff size={16} />}
+            <span className="text-sm">
+              {isConnected ? 'Connected to conference' : 'Not connected to conference'}
+            </span>
+          </div>
+          
+          <div className="grid gap-4">
+            <div className="grid gap-2">
+              <Label htmlFor="roomName">Room Name*</Label>
+              <Input 
+                id="roomName" 
+                value={newRoomName}
+                onChange={(e) => setNewRoomName(e.target.value)}
+                onKeyDown={handleRoomNameKeyDown}
+                placeholder="Enter a room name"
+              />
+            </div>
+            
+            <div className="grid gap-2">
+              <Label htmlFor="roomDescription">Description</Label>
+              <Textarea
+                id="roomDescription"
+                placeholder="Room description (optional)"
+                value={roomDescription}
+                onChange={(e) => setRoomDescription(e.target.value)}
+              />
+            </div>
+            
+            <div className="grid gap-2">
+              <Label htmlFor="roomTemplate">Room Template</Label>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                {roomTemplates.map(template => (
+                  <div
+                    key={template.id}
+                    className={`border rounded-md p-2 cursor-pointer transition-colors ${
+                      roomTemplate === template.id ? 'border-primary bg-primary/10' : 'hover:bg-accent'
+                    }`}
+                    onClick={() => setRoomTemplate(template.id)}
+                  >
+                    <p className="font-medium text-sm">{template.name}</p>
+                    <p className="text-xs text-muted-foreground">{template.description}</p>
+                  </div>
+                ))}
               </div>
             </div>
+            
+            <div className="grid gap-2">
+              <Label htmlFor="roomPrivacy">Room Privacy</Label>
+              <div className="flex space-x-2">
+                <Button
+                  type="button"
+                  variant={roomPrivacy === 'public' ? 'default' : 'outline'}
+                  size="sm"
+                  onClick={() => setRoomPrivacy('public')}
+                  className="flex-1"
+                >
+                  <Globe className="h-4 w-4 mr-2" /> Public
+                </Button>
+                <Button
+                  type="button"
+                  variant={roomPrivacy === 'private' ? 'default' : 'outline'}
+                  size="sm"
+                  onClick={() => setRoomPrivacy('private')}
+                  className="flex-1"
+                >
+                  <LogOut className="h-4 w-4 mr-2" /> Private
+                </Button>
+              </div>
+              <p className="text-xs text-muted-foreground mt-1">
+                {roomPrivacy === 'public' 
+                  ? 'Anyone can join this room'
+                  : 'Only people with the direct link can join'}
+              </p>
+            </div>
+            
+            <div className="grid gap-2">
+              <Label htmlFor="roomCapacity">Max Participants <span className="text-xs text-muted-foreground">({roomCapacity})</span></Label>
+              <Input
+                id="roomCapacity"
+                type="range"
+                min="2"
+                max="50"
+                value={roomCapacity}
+                onChange={e => setRoomCapacity(parseInt(e.target.value))}
+                className="cursor-pointer"
+              />
+            </div>
+            
+            {roomCreationError && (
+              <div className="flex items-center gap-2 text-red-600 text-sm">
+                <AlertCircle size={16} />
+                <span>{roomCreationError}</span>
+              </div>
+            )}
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setShowCreateRoomDialog(false)}>Cancel</Button>
-            <Button onClick={handleCreateRoom}>Create Room</Button>
+            <Button variant="secondary" onClick={() => setShowCreateRoomDialog(false)}>
+              Cancel
+            </Button>
+            <Button 
+              onClick={handleCreateRoom}
+              disabled={!isConnected || !newRoomName.trim()}
+              data-create-room-button
+            >
+              Create Room
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -1153,6 +1666,136 @@ const Conference = () => {
           <DialogFooter>
             <Button variant="outline" onClick={() => setShowCreateCommunityDialog(false)}>Cancel</Button>
             <Button onClick={handleCreateCommunity}>Create Community</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+      
+      {/* Invitation Dialog */}
+      <Dialog open={showInviteDialog} onOpenChange={setShowInviteDialog}>
+        <DialogContent className="sm:max-w-[425px]">
+          <DialogHeader>
+            <DialogTitle>Invite to Room</DialogTitle>
+            <DialogDescription>
+              Send invitations to join "{rooms.find(r => r.id === currentRoomId)?.name || 'this room'}"
+            </DialogDescription>
+          </DialogHeader>
+          <form onSubmit={handleInviteUser}>
+            <div className="grid gap-4 py-4">
+              <div className="space-y-2">
+                <label htmlFor="inviteEmail" className="text-sm font-medium">Email address</label>
+                <div className="flex space-x-2">
+                  <Input
+                    id="inviteEmail"
+                    placeholder="email@example.com"
+                    value={inviteEmail}
+                    onChange={(e) => setInviteEmail(e.target.value)}
+                    className="flex-1"
+                  />
+                  <Button type="submit" disabled={isInviting}>
+                    {isInviting ? (
+                      <span className="flex items-center">
+                        <svg className="animate-spin -ml-1 mr-2 h-4 w-4 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                        </svg>
+                        Inviting
+                      </span>
+                    ) : (
+                      "Invite"
+                    )}
+                  </Button>
+                </div>
+              </div>
+              
+              {inviteError && (
+                <div className="text-sm text-red-500">{inviteError}</div>
+              )}
+              
+              {inviteSuccess && (
+                <div className="text-sm text-green-500">{inviteSuccess}</div>
+              )}
+              
+              {inviteEmails.length > 0 && (
+                <div className="space-y-2">
+                  <label className="text-sm font-medium">Invited users</label>
+                  <div className="space-y-1">
+                    {inviteEmails.map((email) => (
+                      <div key={email} className="flex items-center justify-between p-2 bg-accent/50 rounded-md">
+                        <span className="text-sm">{email}</span>
+                        <Button 
+                          size="sm" 
+                          variant="ghost" 
+                          onClick={() => handleRemoveInvitedEmail(email)}
+                          className="h-6 w-6 p-0"
+                        >
+                          &times;
+                        </Button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+              
+              <div className="border-t pt-4">
+                <div className="flex flex-col space-y-2">
+                  <label className="text-sm font-medium">Or share invitation link</label>
+                  <div className="flex space-x-2">
+                    <Input 
+                      value={`${window.location.origin}/conference?id=${conferenceId}&room=${currentRoomId}`}
+                      readOnly
+                      className="flex-1 bg-accent/10"
+                    />
+                    <Button type="button" onClick={handleCopyInviteLink}>
+                      Copy
+                    </Button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </form>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowInviteDialog(false)}>
+              Close
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+      
+      {/* Avatar Change Dialog */}
+      <Dialog open={showAvatarDialog} onOpenChange={setShowAvatarDialog}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Change Avatar</DialogTitle>
+            <DialogDescription>
+              Upload a new profile picture for this conference.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex flex-col items-center gap-4 py-4">
+            <Avatar className="h-24 w-24">
+              <AvatarImage src={avatarUrl} />
+              <AvatarFallback>You</AvatarFallback>
+            </Avatar>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="image/*"
+              aria-label="Upload avatar image"
+              title="Choose an avatar image"
+              className="hidden"
+              onChange={handleAvatarChange}
+            />
+            <Button 
+              variant="outline" 
+              onClick={() => fileInputRef.current?.click()}
+              disabled={isChangingAvatar}
+            >
+              {isChangingAvatar ? "Uploading..." : "Choose Image"}
+            </Button>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowAvatarDialog(false)}>
+              Cancel
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

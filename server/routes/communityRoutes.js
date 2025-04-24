@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { authMiddleware } = require('../middleware/authMiddleware');
+const { protect } = require('../middleware/auth');
 const communityController = require('../controllers/communityController');
 
 // GET all communities with optional filtering/sorting/pagination
@@ -10,7 +10,7 @@ router.get('/', communityController.getCommunities);
 router.get('/:id', communityController.getCommunityById);
 
 // Protected routes
-router.use(authMiddleware);
+router.use(protect);
 
 // POST create a new community
 router.post('/', communityController.createCommunity);

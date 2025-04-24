@@ -4,6 +4,12 @@ const bcrypt = require('bcryptjs');
 
 // Helper function to check if we're using mock DB
 const usingMockDB = () => {
+  // First priority: explicit env var to use MongoDB
+  if (process.env.USE_MONGODB === 'true') {
+    return false; // Not using mock DB, using real MongoDB
+  }
+  
+  // Second priority: are we in development with mock data
   return global.mockUsers !== undefined;
 };
 

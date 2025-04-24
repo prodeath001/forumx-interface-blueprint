@@ -13,3 +13,17 @@ export function uuid(): string {
       return v.toString(16);
     });
 }
+
+/**
+ * Formats a number into a string with K (thousands) or M (millions) suffix.
+ * Example: 12345 -> 12.3K, 1234567 -> 1.2M
+ */
+export function formatMembers(count: number): string {
+  if (count < 1000) {
+    return count.toString();
+  }
+  if (count < 1000000) {
+    return (count / 1000).toFixed(1).replace(/\.0$/, '') + 'K';
+  }
+  return (count / 1000000).toFixed(1).replace(/\.0$/, '') + 'M';
+}

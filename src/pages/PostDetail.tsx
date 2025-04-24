@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useState, useEffect } from "react";
 import Navbar from "@/components/layout/Navbar";
 import LeftSidebar from "@/components/layout/LeftSidebar";
 import RightSidebar from "@/components/layout/RightSidebar";
@@ -8,100 +8,143 @@ import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { ArrowUpCircle, ArrowDownCircle, MessageSquare, Share, BookmarkPlus } from "lucide-react";
 import { Separator } from "@/components/ui/separator";
+import postService, { Post } from "@/lib/postService";
+import interactionsService, { Comment } from "@/lib/interactionsService";
+import { Skeleton } from "@/components/ui/skeleton";
+
+const formatTimestamp = (timestamp: string | Date): string => {
+  const date = typeof timestamp === 'string' ? new Date(timestamp) : timestamp;
+  const now = new Date();
+  const diffSeconds = Math.round((now.getTime() - date.getTime()) / 1000);
+  const diffMinutes = Math.round(diffSeconds / 60);
+  const diffHours = Math.round(diffMinutes / 60);
+  const diffDays = Math.round(diffHours / 24);
+
+  if (diffSeconds < 60) return `${diffSeconds}s ago`;
+  if (diffMinutes < 60) return `${diffMinutes}m ago`;
+  if (diffHours < 24) return `${diffHours}h ago`;
+  return `${diffDays}d ago`;
+};
 
 const PostDetail = () => {
-  const { postId } = useParams();
-  
-  // Mock post data (in a real app, this would come from an API)
-  const post = {
-    id: postId || "1",
-    title: "What's your favorite programming language and why?",
-    content: "I've been coding for about 5 years now and have used various languages. Currently, I'm most comfortable with JavaScript/TypeScript for web development, but I'm curious what others prefer and why. What language do you enjoy working with the most and what makes it your favorite?",
-    author: {
-      name: "TechEnthusiast",
-      avatar: "https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=48&h=48&auto=format&fit=crop"
-    },
-    community: "Programming",
-    createdAt: "2 hours ago",
-    votes: 128,
-    commentCount: 42
+  const { postId } = useParams<{ postId: string }>();
+  const [post, setPost] = useState<Post | null>(null);
+  const [comments, setComments] = useState<Comment[]>([]);
+  const [loadingPost, setLoadingPost] = useState(true);
+  const [loadingComments, setLoadingComments] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    const fetchPostAndComments = async () => {
+      if (!postId) {
+        setError("Post ID not found.");
+        setLoadingPost(false);
+        setLoadingComments(false);
+        return;
+      }
+
+      setLoadingPost(true);
+      setLoadingComments(true);
+      setError(null);
+
+      try {
+        const postData = await postService.getPostById(postId);
+        if (postData) {
+          setPost(postData);
+        } else {
+          throw new Error("Post not found.");
+        }
+      } catch (err) {
+        console.error("Error fetching post:", err);
+        setError("Failed to load post details.");
+      } finally {
+        setLoadingPost(false);
+      }
+
+      try {
+        const commentData = await interactionsService.getComments(postId);
+        setComments(commentData);
+      } catch (err) {
+        console.error("Error fetching comments:", err);
+      } finally {
+        setLoadingComments(false);
+      }
+    };
+
+    fetchPostAndComments();
+  }, [postId]);
+
+  const handleCommentSubmit = (commentText: string) => {
+    console.log("Submitting comment:", commentText, "for post:", postId);
   };
-  
-  // Mock comments data
-  const comments = [
-    {
-      id: "c1",
-      author: {
-        name: "CodeWizard",
-        avatar: "https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=48&h=48&auto=format&fit=crop"
-      },
-      content: "Python is my go-to. The readability and versatility are unmatched. I use it for web development with Django, data analysis, and even some machine learning projects. The extensive library ecosystem makes almost any task easier.",
-      createdAt: "1 hour ago",
-      votes: 24
-    },
-    {
-      id: "c2",
-      author: {
-        name: "JavaGuru",
-        avatar: ""
-      },
-      content: "I've been using Java for enterprise applications for over a decade now. While it gets criticized for verbosity, the strong typing, excellent tooling, and performance benefits make it worth it for large-scale applications.",
-      createdAt: "45 minutes ago",
-      votes: 15
-    },
-    {
-      id: "c3",
-      author: {
-        name: "WebDev23",
-        avatar: "https://images.unsplash.com/photo-1599566150163-29194dcaad36?w=48&h=48&auto=format&fit=crop"
-      },
-      content: "JavaScript/TypeScript for me as well. The ecosystem has matured so much in recent years. With React, Node.js, and now TypeScript providing type safety, it's become incredibly powerful for full-stack development.",
-      createdAt: "30 minutes ago",
-      votes: 19
-    }
-  ];
+
+  if (loadingPost) {
+    return <PostDetailSkeleton />;
+  }
+
+  if (error) {
+    return (
+      <div className="min-h-screen bg-secondary">
+        <Navbar />
+        <div className="pt-14 flex">
+          <LeftSidebar />
+          <main className="flex-1 sm:ml-56 lg:mr-72">
+            <div className="max-w-3xl mx-auto py-4 px-4">
+              <div className="bg-white p-8 rounded-lg shadow text-center text-red-500">
+                {error}
+              </div>
+            </div>
+          </main>
+          <RightSidebar />
+        </div>
+      </div>
+    );
+  }
+
+  if (!post) {
+    return <div>Post not found.</div>;
+  }
 
   return (
     <div className="min-h-screen bg-secondary">
-      {/* Navbar */}
       <Navbar />
-
-      {/* Main Layout */}
       <div className="pt-14 flex">
-        {/* Left Sidebar */}
         <LeftSidebar />
-
-        {/* Main Content */}
         <main className="flex-1 sm:ml-56 lg:mr-72">
           <div className="max-w-3xl mx-auto py-4 px-4">
-            {/* Post Detail */}
             <div className="bg-white rounded-lg shadow p-4 mb-4">
-              {/* Post Header */}
               <div className="flex items-center gap-2 mb-2">
                 <Avatar className="h-6 w-6">
-                  <AvatarImage src={post.author.avatar} />
-                  <AvatarFallback>{post.author.name.slice(0, 2)}</AvatarFallback>
+                  <AvatarImage src={post.userAvatar} />
+                  <AvatarFallback>{post.username?.slice(0, 2)}</AvatarFallback>
                 </Avatar>
-                <span className="text-sm font-medium">{post.author.name}</span>
-                <span className="text-xs text-muted-foreground">in {post.community}</span>
-                <span className="text-xs text-muted-foreground">• {post.createdAt}</span>
+                <span className="text-sm font-medium">{post.username}</span>
+                <span className="text-xs text-muted-foreground">in {post.communityName}</span>
+                <span className="text-xs text-muted-foreground">• {formatTimestamp(post.timestamp)}</span>
               </div>
               
-              {/* Post Title */}
               <h1 className="text-xl font-semibold mb-2">{post.title}</h1>
               
-              {/* Post Content */}
-              <div className="text-base mb-4">
-                {post.content}
-              </div>
+              {post.content && (
+                <div className="text-base mb-4 prose max-w-none">
+                  {post.content.split('\n').map((paragraph, index) => <p key={index}>{paragraph}</p>)}
+                </div>
+              )}
+              {post.image && (
+                <img src={post.image} alt={post.title} className="rounded-md mb-4 max-h-96 w-auto mx-auto" />
+              )}
+              {post.url && (
+                <a href={post.url} target="_blank" rel="noopener noreferrer" className="text-blue-500 hover:underline text-sm break-all">
+                  {post.url}
+                </a>
+              )}
               
-              {/* Post Actions */}
-              <div className="flex items-center gap-4">
+              <div className="flex items-center gap-4 mt-4">
                 <div className="flex items-center gap-1">
                   <Button variant="ghost" size="sm">
                     <ArrowUpCircle size={18} />
                   </Button>
-                  <span className="text-sm font-medium">{post.votes}</span>
+                  <span className="text-sm font-medium">{post.upvotes - post.downvotes}</span>
                   <Button variant="ghost" size="sm">
                     <ArrowDownCircle size={18} />
                   </Button>
@@ -124,56 +167,152 @@ const PostDetail = () => {
               </div>
             </div>
             
-            {/* Add Comment */}
-            <div className="bg-white rounded-lg shadow p-4 mb-4">
-              <Textarea placeholder="Add a comment..." className="mb-2" />
-              <div className="flex justify-end">
-                <Button variant="default" size="sm">Comment</Button>
-              </div>
-            </div>
+            <AddCommentForm postId={post.id} onSubmit={handleCommentSubmit} />
             
-            {/* Comments */}
-            <div className="bg-white rounded-lg shadow p-4">
+            <div className="bg-white rounded-lg shadow p-4 mt-4">
               <h2 className="text-lg font-semibold mb-4">Comments ({comments.length})</h2>
               
-              <div className="space-y-4">
-                {comments.map((comment) => (
-                  <div key={comment.id} className="border-b pb-4 last:border-0 last:pb-0">
-                    <div className="flex items-center gap-2 mb-2">
-                      <Avatar className="h-6 w-6">
-                        <AvatarImage src={comment.author.avatar} />
-                        <AvatarFallback>{comment.author.name.slice(0, 2)}</AvatarFallback>
-                      </Avatar>
-                      <span className="text-sm font-medium">{comment.author.name}</span>
-                      <span className="text-xs text-muted-foreground">• {comment.createdAt}</span>
-                    </div>
-                    
-                    <div className="text-sm ml-8 mb-2">
-                      {comment.content}
-                    </div>
-                    
-                    <div className="flex items-center gap-2 ml-8">
-                      <Button variant="ghost" size="sm" className="h-6 px-1">
-                        <ArrowUpCircle size={14} />
-                      </Button>
-                      <span className="text-xs font-medium">{comment.votes}</span>
-                      <Button variant="ghost" size="sm" className="h-6 px-1">
-                        <ArrowDownCircle size={14} />
-                      </Button>
-                      <Button variant="ghost" size="sm" className="h-6 px-1 text-xs">Reply</Button>
-                    </div>
-                  </div>
-                ))}
-              </div>
+              {loadingComments ? (
+                <div className="space-y-4">
+                  <CommentSkeleton />
+                  <CommentSkeleton />
+                </div>
+              ) : comments.length > 0 ? (
+                <div className="space-y-4">
+                  {comments.map((comment) => (
+                    <CommentItem key={comment.id} comment={comment} />
+                  ))}
+                </div>
+              ) : (
+                <p className="text-sm text-muted-foreground text-center py-4">No comments yet.</p>
+              )}
             </div>
           </div>
         </main>
-
-        {/* Right Sidebar */}
         <RightSidebar />
       </div>
     </div>
   );
 };
+
+const AddCommentForm = ({ postId, onSubmit }: { postId: string; onSubmit: (text: string) => void }) => {
+  const [commentText, setCommentText] = useState("");
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!commentText.trim()) return;
+    setIsSubmitting(true);
+    setTimeout(() => {
+      onSubmit(commentText);
+      setCommentText("");
+      setIsSubmitting(false);
+    }, 500);
+  };
+  
+  return (
+    <form onSubmit={handleSubmit} className="bg-white rounded-lg shadow p-4 mb-4">
+      <Textarea 
+        placeholder="Add a comment..." 
+        className="mb-2"
+        value={commentText}
+        onChange={(e) => setCommentText(e.target.value)}
+      />
+      <div className="flex justify-end">
+        <Button type="submit" variant="default" size="sm" disabled={!commentText.trim() || isSubmitting}>
+          {isSubmitting ? "Commenting..." : "Comment"}
+        </Button>
+      </div>
+    </form>
+  );
+};
+
+const CommentItem = ({ comment }: { comment: Comment }) => (
+  <div className="border-b pb-4 last:border-0 last:pb-0">
+    <div className="flex items-center gap-2 mb-2">
+      <Avatar className="h-6 w-6">
+        <AvatarImage src={comment.userAvatar} />
+        <AvatarFallback>{comment.userName?.slice(0, 2)}</AvatarFallback>
+      </Avatar>
+      <span className="text-sm font-medium">{comment.userName}</span>
+      <span className="text-xs text-muted-foreground">• {formatTimestamp(comment.timestamp)}</span>
+    </div>
+    
+    <div className="text-sm ml-8 mb-2 prose prose-sm max-w-none">
+      {comment.content.split('\n').map((paragraph, index) => <p key={index}>{paragraph}</p>)}
+    </div>
+    
+    <div className="flex items-center gap-2 ml-8">
+      <Button variant="ghost" size="sm" className="h-6 px-1">
+        <ArrowUpCircle size={14} />
+      </Button>
+      <Button variant="ghost" size="sm" className="h-6 px-1">
+        <ArrowDownCircle size={14} />
+      </Button>
+      <Button variant="ghost" size="sm" className="h-6 px-1 text-xs">Reply</Button>
+    </div>
+  </div>
+);
+
+const PostDetailSkeleton = () => (
+  <div className="min-h-screen bg-secondary">
+    <Navbar />
+    <div className="pt-14 flex">
+      <LeftSidebar />
+      <main className="flex-1 sm:ml-56 lg:mr-72">
+        <div className="max-w-3xl mx-auto py-4 px-4">
+          <div className="bg-white rounded-lg shadow p-4 mb-4 space-y-3">
+            <div className="flex items-center gap-2">
+              <Skeleton className="h-6 w-6 rounded-full" />
+              <Skeleton className="h-4 w-20" />
+              <Skeleton className="h-4 w-24" />
+            </div>
+            <Skeleton className="h-7 w-3/4" />
+            <Skeleton className="h-20 w-full" />
+            <div className="flex items-center gap-4">
+              <Skeleton className="h-8 w-20" />
+              <Skeleton className="h-8 w-24" />
+              <Skeleton className="h-8 w-16" />
+              <Skeleton className="h-8 w-16" />
+            </div>
+          </div>
+          <div className="bg-white rounded-lg shadow p-4 mb-4">
+            <Skeleton className="h-16 w-full mb-2" />
+            <div className="flex justify-end">
+              <Skeleton className="h-9 w-20" />
+            </div>
+          </div>
+          <div className="bg-white rounded-lg shadow p-4">
+            <Skeleton className="h-6 w-32 mb-4" />
+            <div className="space-y-4">
+              <CommentSkeleton />
+              <CommentSkeleton />
+            </div>
+          </div>
+        </div>
+      </main>
+      <RightSidebar />
+    </div>
+  </div>
+);
+
+const CommentSkeleton = () => (
+  <div className="border-b pb-4 last:border-0 last:pb-0">
+    <div className="flex items-center gap-2 mb-2">
+      <Skeleton className="h-6 w-6 rounded-full" />
+      <Skeleton className="h-4 w-16" />
+      <Skeleton className="h-4 w-12" />
+    </div>
+    <div className="ml-8 space-y-1">
+      <Skeleton className="h-4 w-full" />
+      <Skeleton className="h-4 w-2/3" />
+    </div>
+    <div className="flex items-center gap-2 ml-8 mt-2">
+      <Skeleton className="h-6 w-6" />
+      <Skeleton className="h-6 w-6" />
+      <Skeleton className="h-6 w-12" />
+    </div>
+  </div>
+);
 
 export default PostDetail; 

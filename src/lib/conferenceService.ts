@@ -31,6 +31,10 @@ export type Room = {
   participantCount: number;
   participants?: Participant[];
   messages?: Message[];
+  isPrivate?: boolean;
+  template?: string;
+  description?: string;
+  capacity?: number;
 };
 
 export type CommunityInfo = {
@@ -52,12 +56,14 @@ export type ConferenceState = {
   peerConnections: Map<string, RTCPeerConnection>;
   remoteStreams: Map<string, MediaStream>;
   roomCommunity?: CommunityInfo;
+  isAudioEnabled: boolean;
 };
 
 export type MediaUpdates = {
   isVideoOn?: boolean;
   isAudioOn?: boolean;
   isScreenSharing?: boolean;
+  isAudioEnabled?: boolean;
 };
 
 // Default configuration for WebRTC peer connections
@@ -67,6 +73,40 @@ const defaultRTCConfig: RTCConfiguration = {
     { urls: 'stun:stun1.l.google.com:19302' },
     { urls: 'stun:stun2.l.google.com:19302' },
   ]
+};
+
+// Define RoomCreateOptions interface
+export interface RoomCreateOptions {
+  name: string;
+  isPrivate?: boolean;
+  template?: string;
+  description?: string;
+  capacity?: number;
+}
+
+// Update the callback interface to match the implementation
+type ConferenceCallbacks = {
+  onError: (error: Error) => void;
+  onJoined: (participants: Participant[]) => void;
+  onLeft: () => void;
+  onUserJoined: (user: Participant) => void;
+  onUserLeft: (userId: string) => void;
+  onMessageReceived: (message: Message) => void;
+  onRoomCreated: (room: Room) => void;
+  onRoomJoined: (roomId: string, participants: Participant[], messages: Message[]) => void;
+  onUserJoinedRoom: (data: { user: Participant, roomId: string }) => void;
+  onUserLeftRoom: (data: { userId: string, roomId: string }) => void;
+  onMediaUpdated: (userId: string, updates: MediaUpdates) => void;
+  onHandRaised: (userId: string) => void;
+  onHandLowered: (userId: string) => void;
+  onReaction: (userId: string, reaction: string) => void;
+  onMutedByHost: (userId: string) => void;
+  onHostChanged: (userId: string) => void;
+  onScreenShareStarted: (userId: string, stream: MediaStream) => void;
+  onScreenShareStopped: (userId: string) => void;
+  onRoomRemoved: (roomId: string) => void;
+  onRemoteStreamAdded: (userId: string, stream: MediaStream) => void;
+  onRemoteStreamRemoved: (userId: string) => void;
 };
 
 class ConferenceService {
@@ -79,64 +119,254 @@ class ConferenceService {
     roomParticipants: [],
     messages: [],
     peerConnections: new Map<string, RTCPeerConnection>(),
-    remoteStreams: new Map<string, MediaStream>()
+    remoteStreams: new Map<string, MediaStream>(),
+    isAudioEnabled: true
   };
   
-  private callbacks = {
-    onParticipantJoined: (participant: Participant) => {},
-    onParticipantLeft: (participantId: string) => {},
-    onParticipantUpdated: (participantId: string, updates: MediaUpdates) => {},
-    onMessageReceived: (message: Message) => {},
-    onConferenceJoined: (state: ConferenceState) => {},
-    onRemoteStreamAdded: (participantId: string, stream: MediaStream) => {},
-    onRemoteStreamRemoved: (participantId: string) => {},
-    onScreenShareStarted: (participantId: string) => {},
-    onScreenShareStopped: (participantId: string) => {},
-    onHostChanged: (newHostId: string) => {},
-    onRoomJoined: (roomId: string, participants: Participant[], messages: Message[]) => {},
-    onRoomLeft: (roomId: string) => {},
-    onRoomCreated: (room: Room) => {},
-    onRoomRemoved: (roomId: string) => {},
-    onUserJoinedRoom: (roomId: string, participant: Participant) => {},
-    onUserLeftRoom: (roomId: string, participantId: string) => {},
-    onError: (error: Error) => {}
+  // Define the callback types at the class level
+  private callbacks: ConferenceCallbacks = {
+    onError: () => {},
+    onJoined: () => {},
+    onLeft: () => {},
+    onUserJoined: () => {},
+    onUserLeft: () => {},
+    onMessageReceived: () => {},
+    onRoomCreated: () => {},
+    onRoomJoined: () => {},
+    onUserJoinedRoom: () => {},
+    onUserLeftRoom: () => {},
+    onMediaUpdated: () => {},
+    onHandRaised: () => {},
+    onHandLowered: () => {},
+    onReaction: () => {},
+    onMutedByHost: () => {},
+    onHostChanged: () => {},
+    onScreenShareStarted: () => {},
+    onScreenShareStopped: () => {},
+    onRoomRemoved: () => {},
+    onRemoteStreamAdded: () => {},
+    onRemoteStreamRemoved: () => {}
   };
   
-  private serverUrl = 'http://localhost:5001';
+  private serverUrl = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1' 
+    ? 'http://localhost:5001' 
+    : window.location.protocol + '//' + window.location.hostname + (window.location.hostname === 'localhost' ? ':5001' : '');
+  
+  // Detect if we're running in a browser environment that might have connectivity limitations
+  private detectEnvironmentIssues(): { hasIssues: boolean, details: string } {
+    try {
+      const ua = navigator.userAgent;
+      const isIOS = /iPad|iPhone|iPod/.test(ua);
+      const isSafari = /Safari/.test(ua) && !/Chrome/.test(ua);
+      const isFirefox = /Firefox/.test(ua);
+      const isEdge = /Edg/.test(ua);
+      const isChrome = /Chrome/.test(ua) && !/Edg/.test(ua);
+      
+      // Get browser details for logging
+      const browserInfo = {
+        userAgent: ua,
+        isIOS,
+        isSafari,
+        isFirefox,
+        isEdge,
+        isChrome
+      };
+      
+      console.log('Browser environment:', browserInfo);
+      
+      // Check for known problematic browser combinations
+      if (isIOS && isSafari) {
+        return { 
+          hasIssues: true, 
+          details: 'Safari on iOS has known issues with WebSocket connections. You may experience connection problems.'
+        };
+      }
+      
+      return { hasIssues: false, details: '' };
+    } catch (error) {
+      console.error('Error detecting environment:', error);
+      return { hasIssues: false, details: '' };
+    }
+  }
   
   // Connect to the signaling server
-  public connect(): void {
-    if (this.socket && this.socket.connected) {
-      console.log('Already connected to signaling server');
-      return;
+  public connect(): Promise<boolean> {
+    return new Promise((resolve) => {
+      if (this.socket && this.socket.connected) {
+        console.log('Already connected to signaling server');
+        resolve(true);
+        return;
+      }
+      
+      // Detect environment issues that might affect connection
+      const environmentCheck = this.detectEnvironmentIssues();
+      if (environmentCheck.hasIssues) {
+        console.warn(`Environment issue detected: ${environmentCheck.details}`);
+      }
+      
+      try {
+        // First check if server is available before attempting socket connection
+        this.checkServerConnectivity().then(isConnected => {
+          if (!isConnected) {
+            console.error('Server appears to be offline, socket connection will likely fail');
+            this.callbacks.onError(new Error('Conference server is offline. Please try again later.'));
+            resolve(false);
+            return;
+          }
+          
+          console.log('Connecting to signaling server at:', this.serverUrl);
+          
+          // Determine optimal transport based on environment
+          const transports = environmentCheck.hasIssues 
+            ? ['polling', 'websocket'] // Fall back to polling first for problematic browsers
+            : ['websocket', 'polling']; // Prefer WebSocket for modern browsers
+          
+          // Initialize socket with more explicit options for troubleshooting
+          this.socket = io(this.serverUrl, {
+            reconnectionAttempts: 5,
+            reconnectionDelay: 1000,
+            timeout: 10000,
+            autoConnect: true,
+            forceNew: true,
+            transports,
+            upgrade: true,
+            withCredentials: false,
+            rejectUnauthorized: false,
+            extraHeaders: {
+              'Cache-Control': 'no-cache'
+            }
+          });
+          
+          // Set a timeout to force resolution if connect events don't fire
+          const connectionTimeout = setTimeout(() => {
+            if (this.socket && !this.socket.connected) {
+              console.error('Socket connection timed out');
+              this.callbacks.onError(new Error('Connection to conference server timed out. Please try again.'));
+              resolve(false);
+            }
+          }, 8000);
+          
+          this.setupSocketListeners();
+          
+          // Handle successful connection
+          this.socket.on('connect', () => {
+            console.log('Successfully connected to server:', this.socket?.id);
+            clearTimeout(connectionTimeout);
+            resolve(true);
+          });
+          
+          // Add connection error handler
+          this.socket.on('connect_error', (error) => {
+            console.error('Socket connection error:', error);
+            
+            // Try fallback to polling if WebSocket fails
+            if (this.socket?.io?.opts?.transports?.[0] === 'websocket') {
+              console.log('WebSocket connection failed, falling back to polling...');
+              this.socket.io.opts.transports = ['polling'];
+            }
+            
+            this.callbacks.onError(new Error(`Failed to connect to conference server: ${error.message}`));
+            clearTimeout(connectionTimeout);
+            resolve(false);
+          });
+          
+          // Add connection timeout handler
+          this.socket.on('connect_timeout', () => {
+            console.error('Socket connection timeout');
+            this.callbacks.onError(new Error('Connection to conference server timed out. Please try again.'));
+            clearTimeout(connectionTimeout);
+            resolve(false);
+          });
+          
+          // Force socket connection to ensure it tries immediately
+          this.socket.connect();
+        });
+      } catch (error) {
+        console.error('Error initializing socket connection:', error);
+        this.callbacks.onError(error instanceof Error ? error : new Error('Failed to initialize socket connection'));
+        resolve(false);
+      }
+    });
+  }
+  
+  // Attempt to reconnect to the signaling server
+  public async reconnect(): Promise<boolean> {
+    // First disconnect if already connected
+    if (this.socket) {
+      this.socket.disconnect();
+      this.socket = null;
     }
     
-    try {
-      this.socket = io(this.serverUrl, {
-        reconnectionAttempts: 5,
-        reconnectionDelay: 1000,
-        timeout: 10000
-      });
-      
-      this.setupSocketListeners();
-      
-      // Add connection error handler
-      this.socket.on('connect_error', (error) => {
-        console.error('Socket connection error:', error);
-        this.callbacks.onError(new Error('Failed to connect to conference server'));
-      });
-      
-      // Add connection timeout handler
-      this.socket.on('connect_timeout', () => {
-        console.error('Socket connection timeout');
-        this.callbacks.onError(new Error('Connection to conference server timed out'));
-      });
-      
-      console.log('Connecting to signaling server...');
-    } catch (error) {
-      console.error('Error initializing socket connection:', error);
-      this.callbacks.onError(error instanceof Error ? error : new Error('Failed to initialize socket connection'));
+    // Check server availability
+    const isServerAvailable = await this.checkServerConnectivity();
+    if (!isServerAvailable) {
+      console.error('Cannot reconnect: Server is offline');
+      this.callbacks.onError(new Error('Server is offline. Please try again later.'));
+      return false;
     }
+    
+    return this.connect();
+  }
+  
+  // Hard reset for more severe connection issues
+  public async hardReset(): Promise<boolean> {
+    console.log('Performing hard reset of connection...');
+    
+    // Completely close any existing connection
+    if (this.socket) {
+      try {
+        this.socket.removeAllListeners();
+        this.socket.disconnect();
+      } catch (e) {
+        console.error('Error during socket cleanup:', e);
+      }
+      this.socket = null;
+    }
+    
+    // Stop all media
+    this.stopLocalStream();
+    
+    // Close all peer connections
+    this.closePeerConnections();
+    
+    // Save conference state for rejoining
+    const conferenceId = this.state.conferenceId;
+    const roomId = this.state.currentRoomId;
+    
+    // Reset state
+    this.state = {
+      conferenceId: '',
+      currentRoomId: '',
+      participants: [],
+      rooms: [],
+      roomParticipants: [],
+      messages: [],
+      peerConnections: new Map<string, RTCPeerConnection>(),
+      remoteStreams: new Map<string, MediaStream>(),
+      isAudioEnabled: true
+    };
+    
+    // Clear URL's cache (helps with some browser caching issues)
+    const cacheBustingUrl = `${this.serverUrl}/api/health?cache=${Date.now()}`;
+    try {
+      await fetch(cacheBustingUrl, {
+        cache: 'no-cache',
+        headers: { 'Cache-Control': 'no-cache' }
+      });
+    } catch (e) {
+      console.log('Cache busting request failed, continuing anyway');
+    }
+    
+    // Attempt to reconnect
+    const connected = await this.connect();
+    
+    if (connected && conferenceId) {
+      console.log('Successfully reconnected, will attempt to rejoin conference:', conferenceId);
+      this.state.conferenceId = conferenceId;
+      this.state.currentRoomId = roomId;
+    }
+    
+    return connected;
   }
   
   // Disconnect from the signaling server
@@ -161,8 +391,20 @@ class ConferenceService {
     withVideo: boolean = true,
     withAudio: boolean = true
   ): Promise<void> {
-    if (!this.socket) {
-      this.connect();
+    // Try to connect if no socket exists or not connected
+    if (!this.socket || !this.socket.connected) {
+      const connectionSuccess = await this.connect();
+      
+      // If connection failed, try one more time
+      if (!connectionSuccess) {
+        console.log('Initial connection failed, attempting to reconnect...');
+        const retrySuccess = await this.reconnect();
+        
+        if (!retrySuccess) {
+          console.error('Failed to connect to server after retry');
+          // Continue in offline mode
+        }
+      }
     }
     
     // Reset conference state even if socket fails, to allow offline mode
@@ -175,18 +417,24 @@ class ConferenceService {
       messages: [],
       localStream: this.state.localStream,
       peerConnections: new Map<string, RTCPeerConnection>(),
-      remoteStreams: new Map<string, MediaStream>()
+      remoteStreams: new Map<string, MediaStream>(),
+      isAudioEnabled: true
     };
     
     try {
       // Initialize local media stream if video or audio is requested
       if (withVideo || withAudio) {
-        const stream = await navigator.mediaDevices.getUserMedia({
-          video: withVideo,
-          audio: withAudio
-        });
-        
-        this.state.localStream = stream;
+        try {
+          const stream = await navigator.mediaDevices.getUserMedia({
+            video: withVideo,
+            audio: withAudio
+          });
+          
+          this.state.localStream = stream;
+        } catch (mediaError) {
+          console.error('Error accessing media devices:', mediaError);
+          // Continue without media
+        }
       }
       
       if (!this.socket || !this.socket.connected) {
@@ -196,8 +444,8 @@ class ConferenceService {
           socketId: 'local',
           name: userData.name,
           avatar: userData.avatar,
-          isVideoOn: !!withVideo,
-          isAudioOn: !!withAudio,
+          isVideoOn: !!withVideo && !!this.state.localStream,
+          isAudioOn: !!withAudio && !!this.state.localStream,
           isScreenSharing: false,
           isHost: true,
           joinedAt: new Date()
@@ -215,10 +463,10 @@ class ConferenceService {
         
         // Notify application that we've joined (in offline mode)
         setTimeout(() => {
-          this.callbacks.onConferenceJoined({...this.state});
+          this.callbacks.onJoined(this.state.participants);
         }, 100);
         
-        throw new Error('Cannot join conference: Socket connection not established');
+        throw new Error('Cannot join conference: Socket connection not established. You are currently in offline mode.');
       }
       
       // Join the conference
@@ -227,8 +475,8 @@ class ConferenceService {
         roomId: roomId || 'main',
         userData: {
           ...userData,
-          isVideoOn: !!withVideo,
-          isAudioOn: !!withAudio
+          isVideoOn: !!withVideo && !!this.state.localStream,
+          isAudioOn: !!withAudio && !!this.state.localStream
         }
       });
       
@@ -263,7 +511,8 @@ class ConferenceService {
       roomParticipants: [],
       messages: [],
       peerConnections: new Map<string, RTCPeerConnection>(),
-      remoteStreams: new Map<string, MediaStream>()
+      remoteStreams: new Map<string, MediaStream>(),
+      isAudioEnabled: true
     };
   }
   
@@ -287,38 +536,190 @@ class ConferenceService {
     console.log(`Changing to room ${roomId}...`);
   }
   
+  // Leave current room but stay in conference
+  public leaveRoom(): void {
+    if (!this.socket || !this.state.conferenceId) {
+      console.error('Cannot leave room: Not connected to a conference');
+      return;
+    }
+    
+    // If user is in main room, there's nowhere to go
+    if (this.state.currentRoomId === 'main') {
+      console.log('Already in main room, cannot leave');
+      return;
+    }
+    
+    // Change to the main room, which acts as leaving the current room
+    this.socket.emit('change-room', {
+      conferenceId: this.state.conferenceId,
+      newRoomId: 'main'
+    });
+    
+    console.log(`Leaving room ${this.state.currentRoomId}, returning to main room...`);
+  }
+  
+  // Add a method to check server connectivity
+  public async checkServerConnectivity(): Promise<boolean> {
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 5000);
+      
+      // Try multiple endpoints to verify server is truly online
+      const healthCheckUrl = `${this.serverUrl}/api/health`;
+      const fallbackUrl = `${this.serverUrl}/api/conferences`;
+      
+      // Try health endpoint first
+      let response = await fetch(healthCheckUrl, {
+        method: 'GET',
+        signal: controller.signal,
+        cache: 'no-cache', // Prevent caching
+        headers: {
+          'Cache-Control': 'no-cache',
+          'Pragma': 'no-cache'
+        }
+      }).catch(() => null);
+      
+      // If health check fails, try the fallback endpoint
+      if (!response || !response.ok) {
+        console.log('Health check failed, trying fallback endpoint');
+        response = await fetch(fallbackUrl, {
+          method: 'GET',
+          signal: controller.signal,
+          cache: 'no-cache',
+          headers: {
+            'Cache-Control': 'no-cache',
+            'Pragma': 'no-cache'
+          }
+        }).catch(() => null);
+      }
+      
+      clearTimeout(timeoutId);
+      
+      // Check if any of the attempts succeeded
+      const isConnected = response !== null && response.ok;
+      console.log(`Server connectivity check: ${isConnected ? 'Online' : 'Offline'}`);
+      return isConnected;
+    } catch (error) {
+      console.error('Server connectivity check failed:', error);
+      return false;
+    }
+  }
+  
+  // Fallback method to create room locally if server is unavailable
+  private createLocalRoom(options: string | RoomCreateOptions): Room {
+    const roomData = typeof options === 'string' ? { name: options } : options;
+    const roomId = 'local-' + Math.random().toString(36).substring(2, 9);
+    
+    const room: Room = {
+      id: roomId,
+      name: roomData.name,
+      participantCount: 1,
+      isPrivate: roomData.isPrivate || false,
+      template: roomData.template || 'standard',
+      description: roomData.description || '',
+      capacity: roomData.capacity || 10
+    };
+    
+    // Update state to include this room
+    this.state.rooms.push(room);
+    
+    // Set as current room
+    this.state.currentRoomId = roomId;
+    
+    // Update local participants
+    if (this.state.participants.length > 0) {
+      const localUser = this.state.participants[0];
+      this.state.roomParticipants = [localUser];
+    }
+    
+    return room;
+  }
+  
+  // Add a method to check if connected to a conference
+  public isConnectedToConference(): boolean {
+    return !!this.socket && !!this.socket.connected && !!this.state.conferenceId;
+  }
+  
   // Create a new room
-  public createRoom(name?: string): Promise<Room> {
-    return new Promise((resolve, reject) => {
-      if (!this.socket || !this.state.conferenceId) {
+  public async createRoom(options: string | RoomCreateOptions): Promise<Room> {
+    try {
+      if (!this.isConnectedToConference()) {
         const error = new Error('Cannot create room: Not connected to a conference');
         console.error(error);
-        reject(error);
-        return;
+        this.callbacks.onError(error);
+        throw error;
+      }
+      
+      // Log the options for debugging
+      console.log('Creating room with options:', options);
+      
+      // Handle string input for backward compatibility
+      const roomData = typeof options === 'string' 
+        ? { name: options } 
+        : options;
+      
+      // Validate room name
+      if (!roomData.name || roomData.name.trim() === '') {
+        const error = new Error('Room name is required');
+        console.error(error);
+        throw error;
+      }
+      
+      // Check server connectivity first
+      const isServerConnected = await this.checkServerConnectivity().catch(() => false);
+      
+      if (!isServerConnected) {
+        console.warn('Server unreachable, creating local room instead');
+        return this.createLocalRoom(roomData);
       }
       
       // Make API request to create a new room
-      fetch(`${this.serverUrl}/api/conferences/${this.state.conferenceId}/rooms`, {
+      const response = await fetch(`${this.serverUrl}/api/conferences/${this.state.conferenceId}/rooms`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json'
         },
-        body: JSON.stringify({ name })
-      })
-      .then(response => {
-        if (!response.ok) {
-          throw new Error('Failed to create room');
-        }
-        return response.json();
-      })
-      .then(room => {
-        resolve(room);
-      })
-      .catch(error => {
-        console.error('Error creating room:', error);
-        reject(error);
+        body: JSON.stringify(roomData),
+        // Add timeout to avoid hanging requests
+        signal: AbortSignal.timeout(10000)
       });
-    });
+      
+      console.log('Room creation response status:', response.status);
+      
+      if (!response.ok) {
+        const responseText = await response.text();
+        console.error('Error response text:', responseText);
+        
+        let errorMessage = 'Failed to create room';
+        try {
+          const errorData = JSON.parse(responseText);
+          errorMessage = errorData.error || errorMessage;
+        } catch (e) {
+          // If the response is not valid JSON, use the text directly
+          errorMessage = responseText || errorMessage;
+        }
+        
+        throw new Error(errorMessage);
+      }
+      
+      const room = await response.json();
+      console.log('Room created successfully:', room);
+      return room;
+    } catch (error) {
+      console.error('Error creating room:', error);
+      
+      // If the error is a network error (failed to fetch), create a local room
+      if (error instanceof Error && 
+          (error.message.includes('Failed to fetch') || 
+           error.message.includes('NetworkError') ||
+           error.message.includes('Network request failed'))) {
+        console.warn('Network error detected, creating local room instead');
+        const roomData = typeof options === 'string' ? { name: options } : options;
+        return this.createLocalRoom(roomData);
+      }
+      
+      throw error;
+    }
   }
   
   // Send a chat message to current room or a specific room
@@ -368,86 +769,68 @@ class ConferenceService {
     });
   }
   
-  // Start screen sharing
-  public async startScreenShare(): Promise<void> {
+  // Update participant info such as avatar, name, etc.
+  public updateParticipantInfo(updates: Partial<Participant>): void {
     if (!this.socket || !this.state.conferenceId) {
-      console.error('Cannot start screen sharing: Not connected to a conference');
+      console.error('Cannot update participant info: Not connected to a conference');
       return;
     }
     
-    try {
-      // Get screen sharing stream
-      const screenStream = await navigator.mediaDevices.getDisplayMedia({
-        video: true,
-        audio: true
-      });
+    // Send update to server
+    this.socket.emit('update-media', {
+      conferenceId: this.state.conferenceId,
+      updates
+    });
+    
+    // Also update local participant in state
+    const currentUser = this.state.participants.find(p => p.socketId === this.socket?.id);
+    if (currentUser) {
+      Object.assign(currentUser, updates);
       
-      this.state.screenStream = screenStream;
-      
-      // Notify other participants
-      this.socket.emit('start-screen-share', {
-        conferenceId: this.state.conferenceId
-      });
-      
-      // Update media status
-      this.updateMedia({ isScreenSharing: true });
-      
-      // Handle stream ending
-      screenStream.getVideoTracks()[0].onended = () => {
+      // Update in room participants as well if present
+      const roomParticipant = this.state.roomParticipants.find(p => p.id === currentUser.id);
+      if (roomParticipant) {
+        Object.assign(roomParticipant, updates);
+      }
+    }
+  }
+  
+  // Start screen sharing
+  public startScreenShare(stream: MediaStream): void {
+    // Set the screen stream
+    this.state.screenStream = stream;
+
+    // Notify server and participants
+    if (this.socket) {
+      this.updateMedia({ isScreenSharing: true, isAudioEnabled: this.state.isAudioEnabled });
+    }
+
+    // Add listeners to detect when the user stops sharing via browser UI
+    const videoTrack = stream.getVideoTracks()[0];
+    if (videoTrack) {
+      videoTrack.onended = () => {
         this.stopScreenShare();
       };
-      
-      // Add screen track to all peer connections
-      for (const [peerId, pc] of this.state.peerConnections.entries()) {
-        const sender = pc.getSenders().find(s => s.track?.kind === 'video');
-        
-        if (sender) {
-          sender.replaceTrack(screenStream.getVideoTracks()[0]);
-        } else {
-          screenStream.getTracks().forEach(track => {
-            pc.addTrack(track, screenStream);
-          });
-        }
-      }
-    } catch (error) {
-      console.error('Error starting screen share:', error);
-      this.callbacks.onError(error instanceof Error ? error : new Error('Failed to start screen sharing'));
     }
   }
   
   // Stop screen sharing
   public stopScreenShare(): void {
-    if (!this.socket || !this.state.conferenceId || !this.state.screenStream) {
-      return;
-    }
-    
-    // Stop all tracks
-    this.state.screenStream.getTracks().forEach(track => track.stop());
-    
-    // Clear reference
-    this.state.screenStream = undefined;
-    
-    // Notify other participants
-    this.socket.emit('stop-screen-share', {
-      conferenceId: this.state.conferenceId
-    });
-    
-    // Update media status
-    this.updateMedia({ isScreenSharing: false });
-    
-    // Revert to camera video if available
-    if (this.state.localStream) {
-      const videoTrack = this.state.localStream.getVideoTracks()[0];
-      
-      if (videoTrack) {
-        for (const [peerId, pc] of this.state.peerConnections.entries()) {
-          const sender = pc.getSenders().find(s => s.track?.kind === 'video');
-          
-          if (sender) {
-            sender.replaceTrack(videoTrack);
-          }
-        }
+    if (this.state.screenStream) {
+      // Stop all tracks
+      const tracks = this.state.screenStream.getTracks();
+      tracks.forEach(track => track.stop());
+
+      // Clear screen stream reference
+      this.state.screenStream = null;
+
+      // Notify server and participants
+      if (this.socket) {
+        this.updateMedia({ isScreenSharing: false, isAudioEnabled: this.state.isAudioEnabled });
       }
+
+      // Revert to local camera video if available
+      // ... handle video revert logic if needed ...
     }
   }
   
@@ -463,6 +846,27 @@ class ConferenceService {
   private setupSocketListeners(): void {
     if (!this.socket) return;
     
+    // Clear previous listeners to avoid duplicates
+    this.socket.off('user-joined');
+    this.socket.off('user-left');
+    this.socket.off('user-joined-room');
+    this.socket.off('user-left-room');
+    this.socket.off('receive-message');
+    this.socket.off('media-updated');
+    this.socket.off('user-disconnected');
+    this.socket.off('reconnect');
+    this.socket.off('reconnect_error');
+    this.socket.off('reconnect_failed');
+    this.socket.off('connect_error');
+    this.socket.off('disconnect');
+    this.socket.off('room-created');
+    
+    // Add offs for new events
+    this.socket.off('hand-raised');
+    this.socket.off('hand-lowered');
+    this.socket.off('reaction');
+    this.socket.off('muted-by-host');
+
     // User joined conference
     this.socket.on('user-joined', (data: { 
       user: Participant; 
@@ -475,13 +879,13 @@ class ConferenceService {
       this.state.rooms = data.rooms;
       
       // Notify callback
-      this.callbacks.onParticipantJoined(data.user);
+      this.callbacks.onUserJoined(data.user);
       
       // If the user is us, notify that we've joined the conference
       const user = data.participants.find(p => p.socketId === this.socket?.id);
       if (user && user.id === data.user.id) {
-        this.callbacks.onConferenceJoined(this.state);
-        
+        this.callbacks.onJoined(this.state.participants);
+
         // Create peer connections for all existing participants
         for (const participant of data.participants) {
           // Skip ourselves
@@ -493,33 +897,28 @@ class ConferenceService {
       }
     });
     
-    // User joined room
-    this.socket.on('user-joined-room', (data: {
-      user: Participant;
-      roomId: string;
+    // Handle user joined room socket event
+    this.socket.on('user-joined-room', (data: { 
+      userId: string; 
+      roomId: string; 
       roomParticipants: Participant[];
-      messages: Message[];
     }) => {
-      console.log(`User joined room ${data.roomId}:`, data.user.name);
+      console.log(`User ${data.userId} joined room ${data.roomId}`);
       
-      // If current user joined a room, update state
-      if (data.user.socketId === this.socket?.id) {
-        this.state.currentRoomId = data.roomId;
-        this.state.roomParticipants = data.roomParticipants;
+      // Find the room and update its participants
+      const roomIndex = this.state.rooms.findIndex(r => r.id === data.roomId);
+      if (roomIndex !== -1) {
+        this.state.rooms[roomIndex].participants = data.roomParticipants;
         
-        if (data.messages) {
-          this.state.messages = data.messages;
-        }
+        // Find the user who joined
+        const joinedUser = data.roomParticipants.find(p => p.id === data.userId);
         
         // Notify callback
-        this.callbacks.onRoomJoined(data.roomId, data.roomParticipants, data.messages);
-      } else {
-        // Another user joined the room we're in
-        if (data.roomId === this.state.currentRoomId) {
-          this.state.roomParticipants = data.roomParticipants;
-          
-          // Notify callback
-          this.callbacks.onUserJoinedRoom(data.roomId, data.user);
+        if (joinedUser) {
+          this.callbacks.onUserJoinedRoom({ 
+            user: joinedUser, 
+            roomId: data.roomId 
+          });
         }
       }
     });
@@ -537,7 +936,7 @@ class ConferenceService {
       this.closePeerConnection(data.userId);
       
       // Notify callback
-      this.callbacks.onParticipantLeft(data.userId);
+      this.callbacks.onLeft();
     });
     
     // User left room
@@ -546,14 +945,18 @@ class ConferenceService {
       roomId: string;
       roomParticipants: Participant[];
     }) => {
-      console.log(`User left room ${data.roomId}:`, data.userId);
+      console.log(`User ${data.userId} left room ${data.roomId}`);
       
-      // Update room participants if it's our current room
-      if (data.roomId === this.state.currentRoomId) {
-        this.state.roomParticipants = data.roomParticipants;
+      // Find the room and update its participants
+      const roomIndex = this.state.rooms.findIndex(r => r.id === data.roomId);
+      if (roomIndex !== -1) {
+        this.state.rooms[roomIndex].participants = data.roomParticipants;
         
         // Notify callback
-        this.callbacks.onUserLeftRoom(data.roomId, data.userId);
+        this.callbacks.onUserLeftRoom({
+          userId: data.userId,
+          roomId: data.roomId
+        });
       }
     });
     
@@ -566,17 +969,6 @@ class ConferenceService {
       
       // Notify callback
       this.callbacks.onRoomCreated(room);
-    });
-    
-    // Room removed
-    this.socket.on('room-removed', (data: { roomId: string; }) => {
-      console.log('Room removed:', data.roomId);
-      
-      // Remove from rooms list
-      this.state.rooms = this.state.rooms.filter(r => r.id !== data.roomId);
-      
-      // Notify callback
-      this.callbacks.onRoomRemoved(data.roomId);
     });
     
     // User updated media
@@ -605,7 +997,7 @@ class ConferenceService {
       }
       
       // Notify callback
-      this.callbacks.onParticipantUpdated(data.userId, data.updates);
+      this.callbacks.onMediaUpdated(data.userId, data.updates);
     });
     
     // New message received
@@ -725,6 +1117,65 @@ class ConferenceService {
       
       // Notify all listeners that might be interested
       // You might want to add a specific callback for this
+    });
+
+    // Room removed
+    this.socket.on('room-removed', (data: { roomId: string; }) => {
+      console.log('Room removed:', data.roomId);
+      
+      // Remove from rooms list
+      this.state.rooms = this.state.rooms.filter(r => r.id !== data.roomId);
+      
+      // Notify callback
+      this.callbacks.onRoomRemoved(data.roomId);
+    });
+
+    // Add new event listeners
+    this.socket.on('hand-raised', (data: { userId: string, userName: string }) => {
+      console.log(`${data.userName} raised their hand`);
+      // Update UI or state as needed
+      if (this.callbacks['hand-raised']) {
+        this.callbacks['hand-raised'](data);
+      }
+    });
+
+    this.socket.on('hand-lowered', (data: { userId: string, userName: string }) => {
+      console.log(`${data.userName} lowered their hand`);
+      // Update UI or state as needed
+      if (this.callbacks['hand-lowered']) {
+        this.callbacks['hand-lowered'](data);
+      }
+    });
+
+    this.socket.on('reaction', (data: { userId: string, userName: string, reactionType: string }) => {
+      console.log(`${data.userName} reacted with ${data.reactionType}`);
+      // Update UI or state as needed
+      if (this.callbacks['reaction']) {
+        this.callbacks['reaction'](data);
+      }
+    });
+
+    this.socket.on('muted-by-host', () => {
+      console.log('You were muted by the host');
+      
+      // If we have local stream, mute it
+      if (this.state.localStream) {
+        const audioTracks = this.state.localStream.getAudioTracks();
+        audioTracks.forEach(track => {
+          track.enabled = false;
+        });
+      }
+      
+      // Update our media state
+      this.state.isAudioEnabled = false;
+      
+      // Notify application
+      if (this.callbacks['muted-by-host']) {
+        this.callbacks['muted-by-host']();
+      }
+      
+      // Send updated media state to server
+      this.updateMedia({ isAudioEnabled: false });
     });
   }
   
@@ -985,6 +1436,111 @@ class ConferenceService {
       this.callbacks.onError(error instanceof Error ? error : new Error('Failed to create community'));
       return null;
     }
+  }
+  
+  // Mute all participants (host only)
+  public muteAllParticipants(roomId?: string): void {
+    if (!this.socket || !this.state.conferenceId) {
+      console.error('Cannot mute all: Not connected to a conference');
+      return;
+    }
+
+    this.socket.emit('mute-all', {
+      conferenceId: this.state.conferenceId,
+      roomId: roomId || this.state.currentRoomId
+    });
+    
+    console.log(`Requested to mute all participants in room ${roomId || this.state.currentRoomId}`);
+  }
+  
+  // Raise hand to request attention
+  public raiseHand(): void {
+    if (!this.socket || !this.state.conferenceId) {
+      console.error('Cannot raise hand: Not connected to a conference');
+      return;
+    }
+    
+    this.socket.emit('raise-hand', {
+      conferenceId: this.state.conferenceId
+    });
+    
+    console.log('Raised hand signal sent');
+  }
+  
+  // Lower hand after being acknowledged
+  public lowerHand(): void {
+    if (!this.socket || !this.state.conferenceId) {
+      console.error('Cannot lower hand: Not connected to a conference');
+      return;
+    }
+    
+    this.socket.emit('lower-hand', {
+      conferenceId: this.state.conferenceId
+    });
+    
+    console.log('Lowered hand signal sent');
+  }
+  
+  // Send reaction (emoji)
+  public sendReaction(reactionType: 'thumbs-up' | 'clap' | 'heart' | 'laugh' | 'surprised' | 'sad'): void {
+    if (!this.socket || !this.state.conferenceId) {
+      console.error('Cannot send reaction: Not connected to a conference');
+      return;
+    }
+    
+    this.socket.emit('send-reaction', {
+      conferenceId: this.state.conferenceId,
+      reactionType
+    });
+    
+    console.log(`Sent reaction: ${reactionType}`);
+  }
+  
+  // Get detailed stats about the conference
+  public async getConferenceStats(): Promise<any> {
+    if (!this.state.conferenceId) {
+      console.error('Cannot get stats: Not connected to a conference');
+      return null;
+    }
+    
+    try {
+      const response = await fetch(`${this.serverUrl}/api/conferences/${this.state.conferenceId}/stats`);
+      
+      if (!response.ok) {
+        throw new Error('Failed to get conference stats');
+      }
+      
+      return await response.json();
+    } catch (error) {
+      console.error('Error getting conference stats:', error);
+      return null;
+    }
+  }
+  
+  // Kick a participant (host only)
+  public kickParticipant(participantId: string): void {
+    if (!this.socket || !this.state.conferenceId) {
+      console.error('Cannot kick participant: Not connected to a conference');
+      return;
+    }
+    
+    // Check if current user is host
+    const currentUser = this.state.participants.find(p => p.socketId === this.socket?.id);
+    if (!currentUser?.isHost) {
+      console.error('Only hosts can kick participants');
+      return;
+    }
+    
+    // Make API request to kick the participant
+    fetch(`${this.serverUrl}/api/conferences/${this.state.conferenceId}/kick/${participantId}`, {
+      method: 'POST'
+    }).then(response => {
+      if (!response.ok) {
+        console.error('Failed to kick participant');
+      }
+    }).catch(error => {
+      console.error('Error kicking participant:', error);
+    });
   }
 }
 

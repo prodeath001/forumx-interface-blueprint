@@ -5,11 +5,68 @@ import LeftSidebar from "@/components/layout/LeftSidebar";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle, CardFooter } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Users, AlertCircle } from "lucide-react";
+import authService from "@/lib/authService";
+import communityService from "@/lib/communityService";
+
+// Add this helper function for development login
+const DevLoginSection = () => {
+  const [username, setUsername] = useState('testuser');
+  const [password, setPassword] = useState('password');
+  
+  const handleLogin = async () => {
+    try {
+      await authService.login({ username, password });
+      window.location.reload();
+    } catch (error) {
+      console.error("Dev login failed:", error);
+      alert("Login failed: " + (error instanceof Error ? error.message : "Unknown error"));
+    }
+  };
+  
+  if (authService.isAuthenticated()) {
+    const user = authService.getUser();
+    return (
+      <div className="p-4 bg-green-50 rounded-md mb-4">
+        <p className="text-green-700 font-medium">Logged in as: {user?.username || 'Unknown user'}</p>
+        <Button 
+          variant="outline" 
+          size="sm" 
+          className="mt-2"
+          onClick={() => { authService.logout(); window.location.reload(); }}
+        >
+          Logout
+        </Button>
+      </div>
+    );
+  }
+  
+  return (
+    <div className="p-4 bg-yellow-50 rounded-md mb-4">
+      <p className="text-yellow-700 font-medium mb-2">You are not logged in. Login for testing:</p>
+      <div className="flex gap-2 mb-2">
+        <Input 
+          placeholder="Username" 
+          value={username} 
+          onChange={(e) => setUsername(e.target.value)} 
+          className="w-40"
+        />
+        <Input 
+          placeholder="Password" 
+          type="password" 
+          value={password} 
+          onChange={(e) => setPassword(e.target.value)}
+          className="w-40"
+        />
+        <Button onClick={handleLogin} size="sm">Login</Button>
+      </div>
+    </div>
+  );
+};
 
 const CreateCommunity = () => {
   const navigate = useNavigate();
@@ -66,41 +123,78 @@ const CreateCommunity = () => {
     setIsSubmitting(true);
     
     try {
-      // Get auth token
-      const token = localStorage.getItem("token");
-      if (!token) {
+      // Check if user is logged in
+      const isAuthenticated = authService.isAuthenticated();
+      const token = authService.getToken();
+      console.log('Authentication status:', isAuthenticated ? 'Authenticated' : 'Not authenticated');
+      console.log('Token exists:', token ? 'Yes' : 'No');
+      
+      if (!isAuthenticated || !token) {
         setFormErrors(["You must be logged in to create a community"]);
         setIsSubmitting(false);
+        navigate('/login?redirect=/create-community');
         return;
       }
-      
-      // Prepare request body
-      const requestBody = {
+
+      // Prepare community data
+      const communityData = {
         name: formData.name,
         description: formData.description,
         tags: formData.tags.split(',').map(tag => tag.trim()).filter(tag => tag),
         isPrivate: formData.isPrivate,
-        image: formData.image || undefined
+        image: formData.image || ''
       };
       
-      // Make API request
-      const response = await fetch("http://localhost:5001/api/communities", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "Authorization": `Bearer ${token}`
-        },
-        body: JSON.stringify(requestBody)
-      });
+      console.log('Creating community with data:', JSON.stringify(communityData));
       
-      const data = await response.json();
-      
-      if (!response.ok) {
-        throw new Error(data.message || "Failed to create community");
+      // Try a direct API call first
+      try {
+        console.log('Trying direct API call to create community');
+        const directResponse = await fetch('http://localhost:5001/api/communities', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${token}`
+          },
+          body: JSON.stringify(communityData)
+        });
+
+        console.log('Direct API response status:', directResponse.status);
+        
+        if (directResponse.ok) {
+          const responseData = await directResponse.json();
+          console.log('Community created successfully via direct API:', responseData);
+          
+          // Get the community ID or name for navigation
+          const communityId = responseData.community?.id || responseData.id || formData.name;
+          const communityName = responseData.community?.name || responseData.name || formData.name;
+          
+          // Redirect to the new community page
+          console.log(`Navigating to community: ${communityName}`);
+          navigate(`/community/${communityName}`);
+          return;
+        } else {
+          console.error('Direct API call failed with status:', directResponse.status);
+          try {
+            const errorData = await directResponse.json();
+            console.error('Error data:', errorData);
+          } catch (e) {
+            console.error('Could not parse error response');
+          }
+        }
+      } catch (directApiError) {
+        console.error('Direct API call error:', directApiError);
       }
       
+      // Fallback to using the communityService
+      console.log('Falling back to communityService.createCommunity');
+      const response = await communityService.createCommunity(communityData);
+      console.log('Community created successfully:', response);
+      
       // Redirect to the new community page
-      navigate(`/community/${data.data?._id || data.data?.id}`);
+      const communityName = response.name || formData.name;
+      console.log(`Navigating to community: ${communityName}`);
+      navigate(`/community/${communityName}`);
     } catch (error) {
       console.error("Error creating community:", error);
       setFormErrors([error instanceof Error ? error.message : "An unknown error occurred"]);
@@ -118,6 +212,9 @@ const CreateCommunity = () => {
         
         <main className="flex-1 sm:ml-56">
           <div className="max-w-2xl mx-auto py-8 px-4">
+            {/* Development login helper */}
+            <DevLoginSection />
+          
             <Card>
               <CardHeader>
                 <div className="flex items-center gap-2">

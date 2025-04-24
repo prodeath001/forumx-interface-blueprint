@@ -15,19 +15,35 @@ connectDB();
 
 // Create Express app
 const app = express();
-app.use(cors());
+
+// Enhanced CORS configuration
+app.use(cors({
+  origin: ['http://localhost:5173', 'http://localhost:8080', 'http://localhost:3000', 'http://127.0.0.1:5173', '*'],
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
+  credentials: true
+}));
+
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
 // Create HTTP server
 const server = http.createServer(app);
 
-// Create Socket.io server with CORS configuration
+// Create Socket.io server with enhanced CORS configuration
 const io = socketIo(server, {
   cors: {
-    origin: "*",
-    methods: ["GET", "POST"]
-  }
+    origin: ['http://localhost:5173', 'http://localhost:8080', 'http://localhost:3000', 'http://127.0.0.1:5173', '*'],
+    methods: ['GET', 'POST', 'PUT', 'DELETE'],
+    allowedHeaders: ['Content-Type', 'Authorization'],
+    credentials: true
+  },
+  allowEIO3: true, // Allow Engine.IO 3 compatibility
+  pingTimeout: 60000, // Increased ping timeout
+  pingInterval: 25000, // Increased ping interval
+  connectTimeout: 10000, // Increased connection timeout
+  transports: ['websocket', 'polling'], // Allow both transport mechanisms
+  maxHttpBufferSize: 1e8 // Increased buffer size for larger payloads
 });
 
 // Make io available to routes
@@ -38,6 +54,15 @@ global.conferences = new Map();
 
 // Initialize WebRTC signaling
 webRTC(io);
+
+// Add a public health check endpoint accessible without auth
+app.get('/api/health', (req, res) => {
+  res.status(200).json({ 
+    status: 'ok', 
+    timestamp: new Date().toISOString(),
+    database: global.mockUsers ? 'mock' : 'mongodb' 
+  });
+});
 
 // Import and use Cloudinary routes
 const cloudinaryRoutes = require('./cloudinary');
@@ -66,6 +91,11 @@ const users = new Map();
 // Socket.io connection handling
 io.on('connection', (socket) => {
   console.log('New client connected:', socket.id);
+  console.log('Connection details:', {
+    transport: socket.conn.transport.name,
+    address: socket.handshake.address,
+    headers: socket.handshake.headers['user-agent']
+  });
 
   // Join a conference
   socket.on('join-conference', ({ conferenceId, roomId, userData }) => {
@@ -299,10 +329,125 @@ io.on('connection', (socket) => {
     handleUserDisconnect(socket.id);
   });
 
+  // Mute all participants (host only)
+  socket.on('mute-all', ({ conferenceId, roomId }) => {
+    const userInfo = users.get(socket.id);
+    if (!userInfo) return;
+    
+    const conference = conferences.get(conferenceId);
+    if (!conference) return;
+    
+    const user = conference.participants.get(userInfo.userId);
+    if (!user || !user.isHost) {
+      // Only hosts can mute all
+      socket.emit('error', { message: 'Only hosts can mute all participants' });
+      return;
+    }
+    
+    const targetRoom = roomId ? conference.rooms.get(roomId) : conference.rooms.get(userInfo.roomId);
+    if (!targetRoom) return;
+    
+    // Mute all participants except the host
+    for (const [participantId, participant] of targetRoom.participants.entries()) {
+      if (participant.id !== user.id) {
+        participant.isAudioOn = false;
+        
+        // Notify the participant
+        const participantSocketId = findSocketIdByUserId(participant.id);
+        if (participantSocketId) {
+          io.to(participantSocketId).emit('forced-mute');
+        }
+      }
+    }
+    
+    // Notify all participants in the room
+    io.to(`${conferenceId}:${targetRoom.id}`).emit('all-participants-muted', {
+      byUser: {
+        id: user.id,
+        name: user.name
+      }
+    });
+    
+    console.log(`Host ${user.name} muted all participants in room ${targetRoom.id}`);
+  });
+  
+  // Raise hand functionality
+  socket.on('raise-hand', ({ conferenceId }) => {
+    const userInfo = users.get(socket.id);
+    if (!userInfo) return;
+    
+    const conference = conferences.get(conferenceId);
+    if (!conference) return;
+    
+    const user = conference.participants.get(userInfo.userId);
+    if (!user) return;
+    
+    const room = conference.rooms.get(userInfo.roomId);
+    if (!room) return;
+    
+    // Send hand raise event to all room participants
+    io.to(`${conferenceId}:${userInfo.roomId}`).emit('hand-raised', {
+      userId: user.id,
+      userName: user.name,
+      timestamp: new Date()
+    });
+    
+    console.log(`User ${user.name} raised hand in conference ${conferenceId}, room ${userInfo.roomId}`);
+  });
+  
+  // Lower hand functionality
+  socket.on('lower-hand', ({ conferenceId }) => {
+    const userInfo = users.get(socket.id);
+    if (!userInfo) return;
+    
+    const conference = conferences.get(conferenceId);
+    if (!conference) return;
+    
+    const user = conference.participants.get(userInfo.userId);
+    if (!user) return;
+    
+    // Send hand lowered event to all room participants
+    io.to(`${conferenceId}:${userInfo.roomId}`).emit('hand-lowered', {
+      userId: user.id,
+      userName: user.name
+    });
+    
+    console.log(`User ${user.name} lowered hand in conference ${conferenceId}, room ${userInfo.roomId}`);
+  });
+  
+  // Reaction functionality (thumbs up, clapping, etc.)
+  socket.on('send-reaction', ({ conferenceId, reactionType }) => {
+    const userInfo = users.get(socket.id);
+    if (!userInfo) return;
+    
+    const conference = conferences.get(conferenceId);
+    if (!conference) return;
+    
+    const user = conference.participants.get(userInfo.userId);
+    if (!user) return;
+    
+    // Validate reaction type
+    const validReactions = ['thumbs-up', 'clap', 'heart', 'laugh', 'surprised', 'sad'];
+    if (!validReactions.includes(reactionType)) {
+      socket.emit('error', { message: 'Invalid reaction type' });
+      return;
+    }
+    
+    // Send reaction event to all room participants
+    io.to(`${conferenceId}:${userInfo.roomId}`).emit('reaction', {
+      userId: user.id,
+      userName: user.name,
+      reactionType,
+      timestamp: new Date()
+    });
+    
+    console.log(`User ${user.name} sent reaction (${reactionType}) in conference ${conferenceId}`);
+  });
+
   // Handle disconnection
-  socket.on('disconnect', () => {
+  socket.on('disconnect', (reason) => {
+    console.log(`Client disconnected (${socket.id}): ${reason}`);
     handleUserDisconnect(socket.id);
-    console.log('Client disconnected:', socket.id);
   });
 });
 
@@ -379,6 +524,120 @@ function handleUserDisconnect(socketId) {
   users.delete(socketId);
 }
 
+// Get active socket connections info for debugging
+app.get('/api/debug/connections', (req, res) => {
+  const connections = {
+    totalSockets: io.engine.clientsCount,
+    activeSockets: Array.from(io.sockets.sockets).map(([id, socket]) => ({
+      id,
+      transport: socket.conn.transport.name,
+      address: socket.handshake.address,
+      userAgent: socket.handshake.headers['user-agent'],
+      rooms: Array.from(socket.rooms)
+    })),
+    totalConferences: conferences.size,
+    conferences: Array.from(conferences.entries()).map(([id, conf]) => ({
+      id,
+      participantCount: conf.participants.size,
+      roomCount: conf.rooms.size,
+      createdAt: conf.createdAt
+    }))
+  };
+  
+  res.json(connections);
+});
+
+// Force disconnect a client for testing
+app.post('/api/debug/disconnect/:socketId', (req, res) => {
+  const socket = io.sockets.sockets.get(req.params.socketId);
+  
+  if (socket) {
+    socket.disconnect(true);
+    res.json({ success: true, message: `Socket ${req.params.socketId} disconnected` });
+  } else {
+    res.status(404).json({ success: false, message: 'Socket not found' });
+  }
+});
+
+// Add detailed conference stats
+app.get('/api/conferences/:id/stats', (req, res) => {
+  const conferenceId = req.params.id;
+  const conference = conferences.get(conferenceId);
+  
+  if (!conference) {
+    return res.status(404).json({ error: 'Conference not found' });
+  }
+  
+  const stats = {
+    id: conference.id,
+    participantCount: conference.participants.size,
+    roomCount: conference.rooms.size,
+    messageCount: Array.from(conference.rooms.values())
+      .reduce((total, room) => total + room.messages.length, 0),
+    uptime: new Date().getTime() - conference.createdAt.getTime(),
+    rooms: Array.from(conference.rooms.entries()).map(([id, room]) => ({
+      id,
+      name: room.name,
+      participants: Array.from(room.participants.values()).map(p => ({
+        id: p.id,
+        name: p.name,
+        isHost: p.isHost,
+        mediaStatus: {
+          video: p.isVideoOn,
+          audio: p.isAudioOn,
+          screenSharing: p.isScreenSharing
+        }
+      })),
+      messageCount: room.messages.length
+    }))
+  };
+  
+  res.json(stats);
+});
+
+// Kick a user from a conference
+app.post('/api/conferences/:conferenceId/kick/:userId', (req, res) => {
+  const { conferenceId, userId } = req.params;
+  const conference = conferences.get(conferenceId);
+  
+  if (!conference) {
+    return res.status(404).json({ error: 'Conference not found' });
+  }
+  
+  const user = conference.participants.get(userId);
+  
+  if (!user) {
+    return res.status(404).json({ error: 'User not found' });
+  }
+  
+  // Find the socket ID for this user
+  let socketId = null;
+  for (const [sId, uInfo] of users.entries()) {
+    if (uInfo.userId === userId) {
+      socketId = sId;
+      break;
+    }
+  }
+  
+  if (socketId) {
+    const socket = io.sockets.sockets.get(socketId);
+    if (socket) {
+      // Send kick event to the user before disconnecting
+      socket.emit('kicked-from-conference', { conferenceId });
+      
+      // Force disconnect
+      socket.disconnect(true);
+      
+      res.json({ success: true, message: `User ${userId} kicked from conference` });
+    } else {
+      handleUserDisconnect(socketId);
+      res.json({ success: true, message: `User ${userId} removed from conference` });
+    }
+  } else {
+    res.status(404).json({ error: 'User socket not found' });
+  }
+});
+
 // API routes
 
 // Create a new conference
@@ -415,12 +674,29 @@ app.post('/api/conferences/:id/rooms', (req, res) => {
     return res.status(404).json({ error: 'Conference not found' });
   }
   
-  const { name } = req.body;
+  // Extract room properties from request body
+  const { 
+    name, 
+    isPrivate = false, 
+    template = 'standard', 
+    description = '',
+    capacity = 10
+  } = req.body;
+  
+  // Validate the room name
+  if (!name || typeof name !== 'string') {
+    return res.status(400).json({ error: 'Room name is required' });
+  }
+  
   const roomId = uuidv4();
   
   const newRoom = {
     id: roomId,
-    name: name || `Room ${roomId.slice(0, 5)}`,
+    name: name,
+    isPrivate: Boolean(isPrivate),
+    template: template,
+    description: description,
+    capacity: parseInt(capacity, 10) || 10,
     participants: new Map(),
     messages: [],
     createdAt: new Date()
@@ -432,12 +708,21 @@ app.post('/api/conferences/:id/rooms', (req, res) => {
   io.to(conferenceId).emit('room-created', {
     id: roomId,
     name: newRoom.name,
+    isPrivate: newRoom.isPrivate,
+    template: newRoom.template,
+    description: newRoom.description,
+    capacity: newRoom.capacity,
     participantCount: 0
   });
   
   res.status(201).json({
     id: roomId,
-    name: newRoom.name
+    name: newRoom.name,
+    isPrivate: newRoom.isPrivate,
+    template: newRoom.template,
+    description: newRoom.description,
+    capacity: newRoom.capacity,
+    participantCount: 0
   });
 });
 
@@ -504,8 +789,68 @@ app.get('/api/conferences/:conferenceId/rooms/:roomId', (req, res) => {
   });
 });
 
-// Start the server
+// Utility function to find a socket ID from a user ID
+function findSocketIdByUserId(userId) {
+  for (const [socketId, userInfo] of users.entries()) {
+    if (userInfo.userId === userId) {
+      return socketId;
+    }
+  }
+  return null;
+}
+
+// Add a server error handler
+server.on('error', (err) => {
+  console.error('Server error:', err);
+});
+
+// Modify the server listen code to be more robust
 const PORT = process.env.PORT || 5001;
-server.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
-}); 
+let serverInstance = null;
+
+function startServer() {
+  try {
+    serverInstance = server.listen(PORT, () => {
+      console.log(`
+========================================
+🚀 Server running on port ${PORT}
+📝 API Endpoints:
+  - Health: http://localhost:${PORT}/api/health
+  - Conferences: http://localhost:${PORT}/api/conferences
+  - Cloudinary: http://localhost:${PORT}/api/cloudinary
+🔌 Socket.IO ready for connections
+========================================
+      `);
+    });
+    
+    // Add graceful shutdown
+    process.on('SIGINT', gracefulShutdown);
+    process.on('SIGTERM', gracefulShutdown);
+  } catch (error) {
+    console.error('Failed to start server:', error);
+    // Try to restart server after delay
+    setTimeout(() => {
+      console.log('Attempting to restart server...');
+      startServer();
+    }, 5000);
+  }
+}
+
+function gracefulShutdown() {
+  console.log('Shutting down server gracefully...');
+  if (serverInstance) {
+    serverInstance.close(() => {
+      console.log('Server closed');
+      process.exit(0);
+    });
+    
+    // Force close after 10 seconds
+    setTimeout(() => {
+      console.error('Forced shutdown after timeout');
+      process.exit(1);
+    }, 10000);
+  }
+}
+
+// Start the server
+startServer(); 

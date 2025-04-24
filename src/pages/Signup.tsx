@@ -32,12 +32,14 @@ const Signup = () => {
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), 1000);
         
-        const response = await fetch('http://localhost:5001/api', { 
+        // Just check if server responds at all, don't care about status code
+        await fetch('http://localhost:5001/api/health', { 
           signal: controller.signal 
         });
         
         clearTimeout(timeoutId);
-        setOfflineMode(!response.ok);
+        // Server responded (even with 401), so we're online
+        setOfflineMode(false);
       } catch (error) {
         console.warn('API connection test failed:', error);
         setOfflineMode(true);
